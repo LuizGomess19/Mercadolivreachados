@@ -42,13 +42,15 @@ type FiltroFaixaPreco = 'todos' | 'ate-50' | '50-a-100' | 'acima-100';
 type Ordenacao = 'relevancia' | 'menor-preco' | 'maior-preco';
 type SecaoAtiva = 'tudo' | 'looks' | 'decoracao' | 'tecnologia' | 'favoritos' | 'admin';
 
-const PIN_PADRAO_ADMIN = '1234';
+const CACHE_CATALOGO = 'ml_achados_catalogo_cache';
 
 export default function VitrineAfiliadosPage() {
-  // Catálogo dinâmico sincronizado com API + localStorage
+  // Catálogo carregado do banco de dados (via /api/produtos)
   const [catalogo, setCatalogo] = useState<ProdutoAfiliado[]>(PRODUTOS_INICIAIS);
   const [carregandoCatalogo, setCarregandoCatalogo] = useState<boolean>(true);
   const [statusSalvamento, setStatusSalvamento] = useState<string>('');
+  const [salvando, setSalvando] = useState<boolean>(false);
+  const [bancoPersistente, setBancoPersistente] = useState<boolean | null>(null);
 
   // Lista de Favoritos (Salvo no navegador do visitante)
   const [favoritosIds, setFavoritosIds] = useState<string[]>([]);
@@ -99,22 +101,22 @@ export default function VitrineAfiliadosPage() {
   const [copiadoId, setCopiadoId] = useState<string>('');
   const [filtroGerenciarDepto, setFiltroGerenciarDepto] = useState<'todos' | DepartamentoProduto>('todos');
 
-  // Carrega produtos salvos e verifica se o dono já está autenticado neste aparelho
+  // Carrega produtos do banco e verifica no servidor se o dono está autenticado
   useEffect(() => {
-    const authSalvo = localStorage.getItem('afiliado_admin_auth');
-    if (authSalvo === 'true') {
-      setAdminAutenticado(true);
-    }
+    const params = new URLSearchParams(window.location.search);
+    const pediuAdmin = params.get('admin') === '1' || params.get('admin') === 'true';
 
-    // Verifica se acessou via URL secreta ?admin=1
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get('admin') === '1' || params.get('admin') === 'true') {
-        if (authSalvo === 'true') {
-          setSecaoAtiva('admin');
-        } else {
-          setModalPinAberto(true);
+    async function verificarSessao() {
+      try {
+        const res = await fetch('/api/admin', { cache: 'no-store' });
+        const data = await res.json();
+        setAdminAutenticado(!!data.autenticado);
+        if (pediuAdmin) {
+          if (data.autenticado) setSecaoAtiva('admin');
+          else setModalPinAberto(true);
         }
+      } catch {
+        if (pediuAdmin) setModalPinAberto(true);
       }
     }
 
@@ -127,79 +129,104 @@ export default function VitrineAfiliadosPage() {
       }
     }
 
-    async function carregarProdutos() {
-      const backupLocal = localStorage.getItem('afiliado_catalogo_backup');
-      let listaLocal: ProdutoAfiliado[] | null = null;
-      if (backupLocal) {
-        try {
-          const parsed = JSON.parse(backupLocal);
-          if (Array.isArray(parsed)) {
-            listaLocal = parsed;
-            setCatalogo(parsed);
-          }
-        } catch {
-          // Ignora
-        }
-      }
+    // Remove chaves antigas que não são mais usadas (o banco é a fonte da verdade)
+    localStorage.removeItem('afiliado_admin_auth');
+    localStorage.removeItem('afiliado_catalogo_backup');
 
+    async function carregarProdutos() {
       try {
-        const res = await fetch('/api/produtos');
-        if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data.produtos) && data.produtos.length > 0) {
-            // Se já tem alterações locais salvas pelo dono neste navegador, sincroniza com o servidor
-            if (listaLocal && listaLocal.length !== data.produtos.length) {
-              setCatalogo(listaLocal);
-              await fetch('/api/produtos', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ produtos: listaLocal }),
-              });
-            } else {
-              setCatalogo(data.produtos);
-              localStorage.setItem('afiliado_catalogo_backup', JSON.stringify(data.produtos));
-            }
-          }
+        const res = await fetch('/api/produtos', { cache: 'no-store' });
+        if (!res.ok) throw new Error('Falha ao carregar');
+        const data = await res.json();
+        if (Array.isArray(data.produtos)) {
+          setCatalogo(data.produtos);
+          setBancoPersistente(!!data.persistente);
+          // Cache SOMENTE leitura, usado se a internet/servidor falhar
+          localStorage.setItem(CACHE_CATALOGO, JSON.stringify(data.produtos));
         }
       } catch {
-        // Mantém listaLocal ou PRODUTOS_INICIAIS
+        const cache = localStorage.getItem(CACHE_CATALOGO);
+        if (cache) {
+          try {
+            setCatalogo(JSON.parse(cache));
+          } catch {
+            // mantém PRODUTOS_INICIAIS
+          }
+        }
       }
       setCarregandoCatalogo(false);
     }
 
+    verificarSessao();
     carregarProdutos();
   }, []);
 
-  // Função central para salvar sempre (em localStorage + Servidor API)
-  const salvarCatalogoCompleto = async (novaLista: ProdutoAfiliado[], msgFeedback?: string) => {
-    setCatalogo(novaLista);
-    localStorage.setItem('afiliado_catalogo_backup', JSON.stringify(novaLista));
-    setStatusSalvamento('💾 Salvando alterações...');
-
-    try {
-      await fetch('/api/produtos', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ produtos: novaLista }),
-      });
-      setStatusSalvamento(msgFeedback || '✅ Salvo automaticamente!');
-    } catch {
-      setStatusSalvamento('✅ Salvo no dispositivo!');
-    }
-
+  const mostrarStatus = (mensagem: string) => {
+    setStatusSalvamento(mensagem);
     setTimeout(() => setStatusSalvamento(''), 4000);
   };
 
-  // Atalho secreto na Barra de Busca: se digitar #admin ou #1234, abre o painel exclusivo!
-  const handleBuscaChange = (valor: string) => {
+  // Envia uma alteração ao banco. Retorna os dados da resposta ou null em caso de erro.
+  const enviarAoBanco = async (
+    metodo: 'POST' | 'PUT' | 'DELETE',
+    corpo?: ProdutoAfiliado,
+    id?: string
+  ): Promise<{ produto?: ProdutoAfiliado } | null> => {
+    setSalvando(true);
+    setStatusSalvamento('💾 Salvando no banco de dados...');
+    try {
+      const url = metodo === 'DELETE' ? `/api/produtos?id=${encodeURIComponent(id || '')}` : '/api/produtos';
+      const res = await fetch(url, {
+        method: metodo,
+        headers: corpo ? { 'Content-Type': 'application/json' } : undefined,
+        body: corpo ? JSON.stringify(corpo) : undefined,
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (res.status === 401) {
+        setAdminAutenticado(false);
+        setModalPinAberto(true);
+        mostrarStatus('🔒 Sessão expirada. Entre novamente.');
+        return null;
+      }
+      if (!res.ok || !data.ok) {
+        mostrarStatus(`❌ Não foi salvo: ${data.erro || 'erro no servidor'}`);
+        return null;
+      }
+      return data;
+    } catch {
+      mostrarStatus('❌ Sem conexão com o servidor. Nada foi alterado.');
+      return null;
+    } finally {
+      setSalvando(false);
+    }
+  };
+
+  // Atalho secreto na Barra de Busca: digitar #admin ou #1234 abre o login / painel do proprietário
+  const handleBuscaChange = async (valor: string) => {
     const vLimpo = valor.trim().toLowerCase();
-    if (vLimpo === '#admin' || vLimpo === '#1234') {
+    if (vLimpo === '#1234') {
       setBuscaCodigo('');
-      if (vLimpo === '#1234') {
-        setAdminAutenticado(true);
-        localStorage.setItem('afiliado_admin_auth', 'true');
-        setSecaoAtiva('admin');
-      } else if (adminAutenticado) {
+      try {
+        const res = await fetch('/api/admin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin: '1234' }),
+        });
+        if (res.ok) {
+          setAdminAutenticado(true);
+          setSecaoAtiva('admin');
+          return;
+        }
+      } catch {
+        // Fallback abre modal
+      }
+      setModalPinAberto(true);
+      return;
+    }
+    if (vLimpo === '#admin') {
+      setBuscaCodigo('');
+      if (adminAutenticado) {
         setSecaoAtiva('admin');
       } else {
         setModalPinAberto(true);
@@ -426,6 +453,7 @@ export default function VitrineAfiliadosPage() {
   // Salvar Novo Produto ou Atualizar Produto Editado
   const handleSalvarProduto = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (salvando) return;
     if (!novoTitulo.trim() || !novoPreco.trim() || !novoLink.trim()) return;
 
     const numPreco = extrairNumeroPreco(novoPreco);
@@ -469,26 +497,31 @@ export default function VitrineAfiliadosPage() {
       criadoEm: new Date().toISOString(),
     };
 
-    const novaLista = idEmEdicao
-      ? catalogo.map((p) => (p.id === idEmEdicao ? itemSalvo : p))
-      : [itemSalvo, ...catalogo];
+    // Salva no banco PRIMEIRO; a vitrine só muda se o banco confirmar
+    const resposta = await enviarAoBanco(idEmEdicao ? 'PUT' : 'POST', itemSalvo);
+    if (!resposta?.produto) return;
+    const produtoSalvo = resposta.produto;
 
-    await salvarCatalogoCompleto(
-      novaLista,
+    setCatalogo((atual) =>
       idEmEdicao
-        ? `✅ Produto #${itemSalvo.codigo} atualizado e salvo!`
-        : `✅ Novo link #${itemSalvo.codigo} adicionado e salvo!`
+        ? atual.map((p) => (p.id === idEmEdicao ? produtoSalvo : p))
+        : [produtoSalvo, ...atual]
+    );
+    mostrarStatus(
+      idEmEdicao
+        ? `✅ Produto #${produtoSalvo.codigo} atualizado no banco!`
+        : `✅ Novo link #${produtoSalvo.codigo} salvo no banco!`
     );
 
     setMensagemSucesso(
       idEmEdicao
-        ? `Link/Produto #${itemSalvo.codigo} alterado e salvo com sucesso!`
-        : `Novo Link #${itemSalvo.codigo} adicionado e salvo automaticamente em "${
-            itemSalvo.departamento === 'looks'
-              ? `Moda (${itemSalvo.genero})`
-              : itemSalvo.departamento === 'decoracao'
-              ? `Decoração (${itemSalvo.categoria})`
-              : `Tecnologia (${itemSalvo.categoria})`
+        ? `Link/Produto #${produtoSalvo.codigo} alterado e salvo no banco de dados!`
+        : `Novo Link #${produtoSalvo.codigo} salvo no banco de dados em "${
+            produtoSalvo.departamento === 'looks'
+              ? `Moda (${produtoSalvo.genero})`
+              : produtoSalvo.departamento === 'decoracao'
+              ? `Decoração (${produtoSalvo.categoria})`
+              : `Tecnologia (${produtoSalvo.categoria})`
           }"!`
     );
 
@@ -502,26 +535,50 @@ export default function VitrineAfiliadosPage() {
       e.preventDefault();
       e.stopPropagation();
     }
-    const novaLista = catalogo.filter((item) => item.id !== id);
-    await salvarCatalogoCompleto(
-      novaLista,
-      `🗑️ Produto ${codigo ? `#${codigo}` : ''} excluído e salvo!`
-    );
+    if (!window.confirm(`Excluir o produto ${codigo ? `#${codigo}` : ''} da vitrine? Essa ação é permanente.`)) {
+      return;
+    }
+    const resposta = await enviarAoBanco('DELETE', undefined, id);
+    if (!resposta) return;
+    setCatalogo((atual) => atual.filter((item) => item.id !== id));
+    if (idEmEdicao === id) cancelarEdicao();
+    mostrarStatus(`🗑️ Produto ${codigo ? `#${codigo}` : ''} excluído do banco!`);
   };
 
-  // Login Admin
-  const handleLoginAdmin = (e: React.FormEvent) => {
+  // Login do proprietário (senha verificada no servidor)
+  const handleLoginAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (pinDigitado === PIN_PADRAO_ADMIN) {
-      setAdminAutenticado(true);
-      localStorage.setItem('afiliado_admin_auth', 'true');
-      setModalPinAberto(false);
-      setSecaoAtiva('admin');
-      setErroPin('');
-      setPinDigitado('');
-    } else {
-      setErroPin('PIN incorreto! Digite 1234.');
+    setErroPin('');
+    try {
+      const res = await fetch('/api/admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: pinDigitado }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        setAdminAutenticado(true);
+        setModalPinAberto(false);
+        setSecaoAtiva('admin');
+        setPinDigitado('');
+      } else {
+        setErroPin(data.erro || 'Senha incorreta.');
+      }
+    } catch {
+      setErroPin('Sem conexão com o servidor.');
     }
+  };
+
+  // Logout do proprietário (remove o cookie de sessão no servidor)
+  const handleSairAdmin = async () => {
+    try {
+      await fetch('/api/admin', { method: 'DELETE' });
+    } catch {
+      // ignora
+    }
+    setAdminAutenticado(false);
+    cancelarEdicao();
+    if (secaoAtiva === 'admin') setSecaoAtiva('tudo');
   };
 
   // Copia mensagem pronta para divulgação
@@ -797,8 +854,27 @@ export default function VitrineAfiliadosPage() {
               <span className="bg-[#FFE600] text-gray-900 font-extrabold px-2 py-0.5 rounded-xs text-[10px] uppercase">
                 👑 Modo Proprietário (Só você vê)
               </span>
+              {bancoPersistente === false && (
+                <span
+                  className="bg-red-600 text-white font-bold px-2 py-0.5 rounded-xs text-[10px]"
+                  title="Configure SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY para salvar de forma permanente"
+                >
+                  ⚠️ Banco não configurado — alterações só locais
+                </span>
+              )}
+              {bancoPersistente === true && !statusSalvamento && (
+                <span className="text-green-400 font-semibold">🗄️ Banco de dados conectado</span>
+              )}
               {statusSalvamento && (
-                <span className="text-green-400 font-bold">{statusSalvamento}</span>
+                <span
+                  className={`font-bold ${
+                    statusSalvamento.startsWith('❌') || statusSalvamento.startsWith('🔒')
+                      ? 'text-red-300'
+                      : 'text-green-400'
+                  }`}
+                >
+                  {statusSalvamento}
+                </span>
               )}
             </div>
 
@@ -830,15 +906,11 @@ export default function VitrineAfiliadosPage() {
 
               <button
                 type="button"
-                onClick={() => {
-                  setAdminAutenticado(false);
-                  localStorage.removeItem('afiliado_admin_auth');
-                  if (secaoAtiva === 'admin') setSecaoAtiva('tudo');
-                }}
+                onClick={handleSairAdmin}
                 className="px-2.5 py-1 rounded-md bg-red-500/20 hover:bg-red-500/40 text-red-200 font-semibold cursor-pointer"
-                title="Oculta os botões de edição (digite #1234 na busca para ativar novamente)"
+                title="Sai do modo proprietário neste aparelho (digite #admin na busca para entrar de novo)"
               >
-                Ocultar Admin
+                Sair do Admin
               </button>
             </div>
           </div>
@@ -871,7 +943,7 @@ export default function VitrineAfiliadosPage() {
                 autoFocus
                 value={pinDigitado}
                 onChange={(e) => setPinDigitado(e.target.value)}
-                placeholder="PIN Secreto (1234)"
+                placeholder="Sua senha de proprietário"
                 className="w-full text-center text-base font-bold tracking-widest border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:border-[#EE4D2D]"
               />
               {erroPin && <p className="text-xs text-red-600 font-semibold">{erroPin}</p>}
