@@ -1,8 +1,8 @@
-# ✨ Achadinhos Festas - Vitrine Oficial de Afiliados
+# ✨ Mercado Livre Achados (Mercadolivreachados)
 
-Vitrine mobile-first e responsiva desenvolvida com **Next.js 15**, **React 19** e **Tailwind CSS**, combinando a identidade visual de confiança do **Mercado Livre** com gatilhos de conversão e filtros rápidos da **Shopee**.
+Vitrine oficial de afiliados desenvolvida com **Next.js 15**, **React 19** e **Tailwind CSS**, combinando a identidade visual de confiança do **Mercado Livre** com gatilhos de conversão e filtros rápidos da **Shopee**.
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/LuizGomess19/loja-afiliado)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/LuizGomess19/Mercadolivreachados)
 
 ---
 
@@ -21,12 +21,11 @@ Vitrine mobile-first e responsiva desenvolvida com **Next.js 15**, **React 19** 
   - 🎄 **Decoração**: Árvores, guirlandas, iluminação LED, mesa posta para ceia e balões.
   - 📱 **Tecnologia**: Fones, caixas de som, smartwatches e iluminação inteligente.
 
-- **🔒 Minha Área (Painel do Afiliado / Admin)**:
-  - Acesso protegido por PIN (`1234`).
-  - Auto-classificação inteligente pelo título do produto.
-  - Cálculo automático de `% OFF` e sugestão de códigos.
-  - Pré-visualização do card em tempo real.
-  - Gerenciamento e exclusão de ofertas esgotadas.
+- **👑 Modo Proprietário Secreto (Invisível para Clientes)**:
+  - Ativação secreta digitando `#1234` ou `#admin` na busca do site.
+  - Adição de novos links com auto-classificação inteligente por departamento.
+  - Botões `✏️ Editar` e `🗑️ Excluir` direto em cada card de produto da página.
+  - Salvamento automático persistente via rota `PUT /api/produtos` e `localStorage`.
 
 ---
 
@@ -44,10 +43,10 @@ Vitrine mobile-first e responsiva desenvolvida com **Next.js 15**, **React 19** 
 
 ```bash
 # 1. Clone o repositório
-git clone https://github.com/LuizGomess19/loja-afiliado.git
+git clone https://github.com/LuizGomess19/Mercadolivreachados.git
 
 # 2. Acesse a pasta
-cd loja-afiliado
+cd Mercadolivreachados
 
 # 3. Instale as dependências
 npm install
@@ -60,9 +59,8 @@ Acesse em seu navegador: [http://localhost:3000](http://localhost:3000)
 
 ---
 
-## 🌐 Deploy na Vercel
+## 🌐 Deploy na Vercel (1 Clique)
 
 Clique no botão abaixo para fazer o deploy instantâneo na Vercel:
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/LuizGomess19/loja-afiliado)
-
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/LuizGomess19/Mercadolivreachados)

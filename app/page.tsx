@@ -898,11 +898,11 @@ export default function VitrineAfiliadosPage() {
                 className="flex items-center gap-2 text-left cursor-pointer select-none"
               >
                 <span className="inline-flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-gray-900 text-[#FFE600] font-black text-sm sm:text-base shadow-2xs">
-                  AF
+                  ML
                 </span>
                 <div>
                   <span className="block text-sm sm:text-base font-extrabold tracking-tight text-gray-900 leading-none">
-                    ACHADINHOS FESTAS
+                    MERCADO LIVRE ACHADOS
                   </span>
                   <span className="block text-[11px] text-gray-700 font-medium mt-0.5">
                     Moda • Decoração • Tecnologia
@@ -1877,7 +1877,7 @@ export default function VitrineAfiliadosPage() {
       <footer className="w-full bg-white border-t border-gray-200 mt-10 py-6 text-center text-xs text-gray-500">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
           <p className="font-semibold text-gray-700">
-            ✨ Achadinhos Festas • Moda, Decoração &amp; Tecnologia
+            ✨ Mercado Livre Achados • Moda, Decoração &amp; Tecnologia
           </p>
           <p className="text-gray-400">
             Redirecionamento seguro para lojas oficiais parceiras (Mercado Livre &amp; Shopee).

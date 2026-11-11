@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Achadinhos Festas • Looks de Natal e Réveillon',
-  description: 'Vitrine oficial de looks de Natal e Réveillon com envio rápido e ofertas selecionadas.',
+  title: 'Mercado Livre Achados • Vitrine Oficial de Ofertas',
+  description: 'Vitrine oficial Mercado Livre Achados: looks de festa, decoração e tecnologia com frete grátis.',
 };
 
 export default function RootLayout({
