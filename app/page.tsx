@@ -48,6 +48,7 @@ export default function VitrineAfiliadosPage() {
   // Catálogo dinâmico sincronizado com API + localStorage
   const [catalogo, setCatalogo] = useState<ProdutoAfiliado[]>(PRODUTOS_INICIAIS);
   const [carregandoCatalogo, setCarregandoCatalogo] = useState<boolean>(true);
+  const [statusSalvamento, setStatusSalvamento] = useState<string>('');
 
   // Lista de Favoritos (Salvo no navegador do visitante)
   const [favoritosIds, setFavoritosIds] = useState<string[]>([]);
@@ -70,12 +71,17 @@ export default function VitrineAfiliadosPage() {
   const [subcategoriaTech, setSubcategoriaTech] = useState<string>('Todas');
   const [faixaPrecoTech, setFaixaPrecoTech] = useState<FiltroFaixaPreco>('todos');
 
-  // Estados da Aba "Minha Área" (Admin)
+  // =========================================================================
+  // ESTADOS EXCLUSIVOS DO PROPRIETÁRIO (SÓ APARECEM PARA VOCÊ)
+  // =========================================================================
   const [adminAutenticado, setAdminAutenticado] = useState<boolean>(false);
+  const [modalPinAberto, setModalPinAberto] = useState<boolean>(false);
   const [pinDigitado, setPinDigitado] = useState<string>('');
   const [erroPin, setErroPin] = useState<string>('');
+  const [cliquesSecretosLogo, setCliquesSecretosLogo] = useState<number>(0);
 
-  // Campos do Formulário de Novo Produto
+  // Campos do Formulário de Adicionar / Editar Produto
+  const [idEmEdicao, setIdEmEdicao] = useState<string | null>(null);
   const [novoTitulo, setNovoTitulo] = useState<string>('');
   const [novoCodigo, setNovoCodigo] = useState<string>('');
   const [novoPreco, setNovoPreco] = useState<string>('');
@@ -93,11 +99,23 @@ export default function VitrineAfiliadosPage() {
   const [copiadoId, setCopiadoId] = useState<string>('');
   const [filtroGerenciarDepto, setFiltroGerenciarDepto] = useState<'todos' | DepartamentoProduto>('todos');
 
-  // Carrega produtos salvos e favoritos do visitante
+  // Carrega produtos salvos e verifica se o dono já está autenticado neste aparelho
   useEffect(() => {
     const authSalvo = localStorage.getItem('afiliado_admin_auth');
     if (authSalvo === 'true') {
       setAdminAutenticado(true);
+    }
+
+    // Verifica se acessou via URL secreta ?admin=1
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('admin') === '1' || params.get('admin') === 'true') {
+        if (authSalvo === 'true') {
+          setSecaoAtiva('admin');
+        } else {
+          setModalPinAberto(true);
+        }
+      }
     }
 
     const favSalvos = localStorage.getItem('afiliado_favoritos');
@@ -110,34 +128,106 @@ export default function VitrineAfiliadosPage() {
     }
 
     async function carregarProdutos() {
+      const backupLocal = localStorage.getItem('afiliado_catalogo_backup');
+      let listaLocal: ProdutoAfiliado[] | null = null;
+      if (backupLocal) {
+        try {
+          const parsed = JSON.parse(backupLocal);
+          if (Array.isArray(parsed)) {
+            listaLocal = parsed;
+            setCatalogo(parsed);
+          }
+        } catch {
+          // Ignora
+        }
+      }
+
       try {
         const res = await fetch('/api/produtos');
         if (res.ok) {
           const data = await res.json();
           if (Array.isArray(data.produtos) && data.produtos.length > 0) {
-            setCatalogo(data.produtos);
-            localStorage.setItem('afiliado_catalogo_backup', JSON.stringify(data.produtos));
-            setCarregandoCatalogo(false);
-            return;
+            // Se já tem alterações locais salvas pelo dono neste navegador, sincroniza com o servidor
+            if (listaLocal && listaLocal.length !== data.produtos.length) {
+              setCatalogo(listaLocal);
+              await fetch('/api/produtos', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ produtos: listaLocal }),
+              });
+            } else {
+              setCatalogo(data.produtos);
+              localStorage.setItem('afiliado_catalogo_backup', JSON.stringify(data.produtos));
+            }
           }
         }
       } catch {
-        // Fallback para localStorage se offline
-      }
-
-      const backupLocal = localStorage.getItem('afiliado_catalogo_backup');
-      if (backupLocal) {
-        try {
-          setCatalogo(JSON.parse(backupLocal));
-        } catch {
-          setCatalogo(PRODUTOS_INICIAIS);
-        }
+        // Mantém listaLocal ou PRODUTOS_INICIAIS
       }
       setCarregandoCatalogo(false);
     }
 
     carregarProdutos();
   }, []);
+
+  // Função central para salvar sempre (em localStorage + Servidor API)
+  const salvarCatalogoCompleto = async (novaLista: ProdutoAfiliado[], msgFeedback?: string) => {
+    setCatalogo(novaLista);
+    localStorage.setItem('afiliado_catalogo_backup', JSON.stringify(novaLista));
+    setStatusSalvamento('💾 Salvando alterações...');
+
+    try {
+      await fetch('/api/produtos', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ produtos: novaLista }),
+      });
+      setStatusSalvamento(msgFeedback || '✅ Salvo automaticamente!');
+    } catch {
+      setStatusSalvamento('✅ Salvo no dispositivo!');
+    }
+
+    setTimeout(() => setStatusSalvamento(''), 4000);
+  };
+
+  // Atalho secreto na Barra de Busca: se digitar #admin ou #1234, abre o painel exclusivo!
+  const handleBuscaChange = (valor: string) => {
+    const vLimpo = valor.trim().toLowerCase();
+    if (vLimpo === '#admin' || vLimpo === '#1234') {
+      setBuscaCodigo('');
+      if (vLimpo === '#1234') {
+        setAdminAutenticado(true);
+        localStorage.setItem('afiliado_admin_auth', 'true');
+        setSecaoAtiva('admin');
+      } else if (adminAutenticado) {
+        setSecaoAtiva('admin');
+      } else {
+        setModalPinAberto(true);
+      }
+      return;
+    }
+    setBuscaCodigo(valor);
+  };
+
+  // Atalho secreto clicando 5x na logo AF
+  const handleCliqueLogo = () => {
+    setBuscaCodigo('');
+    if (secaoAtiva === 'admin') {
+      setSecaoAtiva('tudo');
+      return;
+    }
+    const proximo = cliquesSecretosLogo + 1;
+    if (proximo >= 5) {
+      setCliquesSecretosLogo(0);
+      if (adminAutenticado) {
+        setSecaoAtiva('admin');
+      } else {
+        setModalPinAberto(true);
+      }
+    } else {
+      setCliquesSecretosLogo(proximo);
+    }
+  };
 
   // Alterna Favoritos
   const toggleFavorito = (e: React.MouseEvent, id: string) => {
@@ -154,8 +244,9 @@ export default function VitrineAfiliadosPage() {
     localStorage.setItem('afiliado_favoritos', JSON.stringify(novosFavs));
   };
 
-  // Sugere automaticamente o próximo código disponível conforme o departamento
+  // Sugere automaticamente o próximo código disponível quando NÃO está editando um produto existente
   useEffect(() => {
+    if (idEmEdicao) return;
     const prefixo =
       novoDepartamento === 'looks' ? 0 : novoDepartamento === 'decoracao' ? 100 : 200;
     const codigosDepto = catalogo
@@ -166,16 +257,15 @@ export default function VitrineAfiliadosPage() {
     const maior = codigosDepto.length > 0 ? Math.max(...codigosDepto) : prefixo;
     const proximo = String(maior + 1).padStart(3, '0');
     setNovoCodigo(proximo);
-  }, [novoDepartamento, catalogo]);
+  }, [novoDepartamento, catalogo, idEmEdicao]);
 
-  // Inteligência de Classificação Automática ao digitar Título ou Link
+  // Inteligência de Classificação Automática ao digitar Título
   const handleTituloChange = (texto: string) => {
     setNovoTitulo(texto);
     if (!autoClassificar) return;
 
     const t = texto.toLowerCase();
 
-    // 1. Detecta Departamento + Subcategoria automaticamente pelo nome
     if (
       t.includes('fone') ||
       t.includes('caixa de som') ||
@@ -267,7 +357,6 @@ export default function VitrineAfiliadosPage() {
       }
     }
 
-    // 2. Detecta Ocasião (Natal vs Réveillon)
     if (t.includes('réveillon') || t.includes('reveillon') || t.includes('ano novo') || t.includes('virada')) {
       setNovaOcasiao('Réveillon');
     } else if (t.includes('natal') || t.includes('noel')) {
@@ -302,8 +391,40 @@ export default function VitrineAfiliadosPage() {
       ? `${Math.round(((precoAntigoNum - precoAtualNum) / precoAntigoNum) * 100)}% OFF`
       : undefined;
 
-  // Salvar Novo Produto Afiliado
-  const handleCadastrarProduto = async (e: React.FormEvent) => {
+  // Carregar produto no formulário para Editar Link / Preço / Dados
+  const iniciarEdicaoProduto = (e: React.MouseEvent | null, item: ProdutoAfiliado) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    setIdEmEdicao(item.id);
+    setNovoTitulo(item.titulo);
+    setNovoCodigo(item.codigo);
+    setNovoPreco(item.preco);
+    setNovoPrecoAntigo(item.precoAntigo || '');
+    setNovoLink(item.link);
+    setNovaImagem(item.imagem);
+    setNovoDepartamento(item.departamento);
+    setNovoGenero(item.genero || 'Feminino');
+    setNovaCategoria(item.categoria);
+    setNovaOcasiao(item.ocasiao);
+    setNovoAmbiente(item.ambiente || 'Sala');
+    setNovaLoja(item.loja);
+    setSecaoAtiva('admin');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const cancelarEdicao = () => {
+    setIdEmEdicao(null);
+    setNovoTitulo('');
+    setNovoPreco('');
+    setNovoPrecoAntigo('');
+    setNovoLink('');
+    setNovaImagem('');
+  };
+
+  // Salvar Novo Produto ou Atualizar Produto Editado
+  const handleSalvarProduto = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!novoTitulo.trim() || !novoPreco.trim() || !novoLink.trim()) return;
 
@@ -323,8 +444,8 @@ export default function VitrineAfiliadosPage() {
     const categoriaFinal =
       novoDepartamento === 'looks' ? novoGenero : novaCategoria;
 
-    const novoItem: ProdutoAfiliado = {
-      id: `${novoDepartamento}-${Date.now()}`,
+    const itemSalvo: ProdutoAfiliado = {
+      id: idEmEdicao || `${novoDepartamento}-${Date.now()}`,
       codigo: novoCodigo.trim().replace(/^#/, '') || '999',
       titulo: novoTitulo.trim(),
       preco: precoFormatado,
@@ -338,7 +459,7 @@ export default function VitrineAfiliadosPage() {
       ambiente: novoDepartamento === 'decoracao' ? novoAmbiente : undefined,
       loja: novaLoja,
       avaliacao: '4.9',
-      vendidos: 'Novo na vitrine 🔥',
+      vendidos: idEmEdicao ? 'Oferta Verificada 🔥' : 'Novo na vitrine 🔥',
       emAlta: true,
       freteGratis: true,
       imagem:
@@ -348,50 +469,44 @@ export default function VitrineAfiliadosPage() {
       criadoEm: new Date().toISOString(),
     };
 
-    const novaLista = [novoItem, ...catalogo];
-    setCatalogo(novaLista);
-    localStorage.setItem('afiliado_catalogo_backup', JSON.stringify(novaLista));
+    const novaLista = idEmEdicao
+      ? catalogo.map((p) => (p.id === idEmEdicao ? itemSalvo : p))
+      : [itemSalvo, ...catalogo];
 
-    try {
-      await fetch('/api/produtos', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(novoItem),
-      });
-    } catch {
-      // Já salvo no estado e localStorage
-    }
-
-    setNovoTitulo('');
-    setNovoPreco('');
-    setNovoPrecoAntigo('');
-    setNovoLink('');
-    setNovaImagem('');
-    setMensagemSucesso(
-      `Produto #${novoItem.codigo} publicado com sucesso em "${
-        novoItem.departamento === 'looks'
-          ? `Moda (${novoItem.genero})`
-          : novoItem.departamento === 'decoracao'
-          ? `Decoração (${novoItem.categoria})`
-          : `Tecnologia (${novoItem.categoria})`
-      }"!`
+    await salvarCatalogoCompleto(
+      novaLista,
+      idEmEdicao
+        ? `✅ Produto #${itemSalvo.codigo} atualizado e salvo!`
+        : `✅ Novo link #${itemSalvo.codigo} adicionado e salvo!`
     );
+
+    setMensagemSucesso(
+      idEmEdicao
+        ? `Link/Produto #${itemSalvo.codigo} alterado e salvo com sucesso!`
+        : `Novo Link #${itemSalvo.codigo} adicionado e salvo automaticamente em "${
+            itemSalvo.departamento === 'looks'
+              ? `Moda (${itemSalvo.genero})`
+              : itemSalvo.departamento === 'decoracao'
+              ? `Decoração (${itemSalvo.categoria})`
+              : `Tecnologia (${itemSalvo.categoria})`
+          }"!`
+    );
+
+    cancelarEdicao();
     setTimeout(() => setMensagemSucesso(''), 5000);
   };
 
-  // Excluir Produto
-  const handleExcluirProduto = async (id: string) => {
-    const novaLista = catalogo.filter((item) => item.id !== id);
-    setCatalogo(novaLista);
-    localStorage.setItem('afiliado_catalogo_backup', JSON.stringify(novaLista));
-
-    try {
-      await fetch(`/api/produtos?id=${encodeURIComponent(id)}`, {
-        method: 'DELETE',
-      });
-    } catch {
-      // Ignora erro offline
+  // Excluir Produto (Direto do Card na Página ou da Lista Admin)
+  const handleExcluirProduto = async (e: React.MouseEvent | null, id: string, codigo?: string) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
     }
+    const novaLista = catalogo.filter((item) => item.id !== id);
+    await salvarCatalogoCompleto(
+      novaLista,
+      `🗑️ Produto ${codigo ? `#${codigo}` : ''} excluído e salvo!`
+    );
   };
 
   // Login Admin
@@ -400,15 +515,18 @@ export default function VitrineAfiliadosPage() {
     if (pinDigitado === PIN_PADRAO_ADMIN) {
       setAdminAutenticado(true);
       localStorage.setItem('afiliado_admin_auth', 'true');
+      setModalPinAberto(false);
+      setSecaoAtiva('admin');
       setErroPin('');
+      setPinDigitado('');
     } else {
-      setErroPin('PIN incorreto! Use o PIN padrão 1234.');
+      setErroPin('PIN incorreto! Digite 1234.');
     }
   };
 
   // Copia mensagem pronta para divulgação
   const copiarMensagemDivulgacao = (item: ProdutoAfiliado) => {
-    const texto = `🔥 ACHADINHO EM ALTA #${item.codigo}\n\n👗 ${item.titulo}\n💰 Por apenas ${item.preco} (Frete Grátis ⚡)\n\n👉 Acesse o link oficial aqui: ${item.link}`;
+    const texto = `🔥 ACHADINHO EM ALTA #${item.codigo}\n\n✨ ${item.titulo}\n💰 Por apenas ${item.preco} (Frete Grátis ⚡)\n\n👉 Link oficial na loja: ${item.link}`;
     navigator.clipboard.writeText(texto);
     setCopiadoId(item.id);
     setTimeout(() => setCopiadoId(''), 3000);
@@ -427,92 +545,75 @@ export default function VitrineAfiliadosPage() {
     });
   };
 
-  // 1. Looks (Moda Masculino / Feminino / Natal / Réveillon)
   const looksFiltrados = ordenarLista(
     catalogo.filter((item) => {
       if (item.departamento !== 'looks') return false;
-
       const matchBusca =
         termoLimpo === '' ||
         item.codigo.toLowerCase().includes(termoLimpo) ||
         item.titulo.toLowerCase().includes(termoLimpo);
-
       const matchCategoria =
         categoriaLookAtiva === 'Todos' ||
         item.ocasiao === categoriaLookAtiva ||
         item.genero === categoriaLookAtiva ||
         item.categoria === categoriaLookAtiva;
-
       return matchBusca && matchCategoria;
     })
   );
 
-  // 2. Decoração
   const decoracoesFiltradas = ordenarLista(
     catalogo.filter((item) => {
       if (item.departamento !== 'decoracao') return false;
-
       const matchBusca =
         termoLimpo === '' ||
         item.codigo.toLowerCase().includes(termoLimpo) ||
         item.titulo.toLowerCase().includes(termoLimpo) ||
         item.categoria.toLowerCase().includes(termoLimpo);
-
       const matchSub =
         subcategoriaDeco === 'Todas' || item.categoria === subcategoriaDeco;
-
       const matchOcasiao =
         ocasiaoDeco === 'Todas' ||
         item.ocasiao === ocasiaoDeco ||
         item.ocasiao === 'Ambas';
-
       const matchAmbiente =
         ambienteDeco === 'Todos Ambientes' || item.ambiente === ambienteDeco;
-
       const matchPreco =
         faixaPrecoDeco === 'todos' ||
         (faixaPrecoDeco === 'ate-50' && item.precoNumerico <= 50) ||
         (faixaPrecoDeco === '50-a-100' && item.precoNumerico > 50 && item.precoNumerico <= 100) ||
         (faixaPrecoDeco === 'acima-100' && item.precoNumerico > 100);
-
       return matchBusca && matchSub && matchOcasiao && matchAmbiente && matchPreco;
     })
   );
 
-  // 3. Tecnologia
   const tecnologiaFiltrada = ordenarLista(
     catalogo.filter((item) => {
       if (item.departamento !== 'tecnologia') return false;
-
       const matchBusca =
         termoLimpo === '' ||
         item.codigo.toLowerCase().includes(termoLimpo) ||
         item.titulo.toLowerCase().includes(termoLimpo) ||
         item.categoria.toLowerCase().includes(termoLimpo);
-
       const matchSub =
         subcategoriaTech === 'Todas' || item.categoria === subcategoriaTech;
-
       const matchPreco =
         faixaPrecoTech === 'todos' ||
         (faixaPrecoTech === 'ate-50' && item.precoNumerico <= 50) ||
         (faixaPrecoTech === '50-a-100' && item.precoNumerico > 50 && item.precoNumerico <= 100) ||
         (faixaPrecoTech === 'acima-100' && item.precoNumerico > 100);
-
       return matchBusca && matchSub && matchPreco;
     })
   );
 
-  // 4. Meus Favoritos
   const favoritosFiltrados = ordenarLista(
     catalogo.filter((item) => favoritosIds.includes(item.id))
   );
 
-  // Renderizador do Card Híbrido com WhatsApp e Favoritos
-  const renderCardProduto = (item: ProdutoAfiliado) => {
+  // Renderizador do Card Híbrido (Com botões de Editar e Excluir que SÓ aparecem para o Admin)
+  const renderCardProduto = (item: ProdutoAfiliado, isPreview = false) => {
     const isFavorito = favoritosIds.includes(item.id);
     const msgWhats = encodeURIComponent(
-      `Olha esse look que encontrei na vitrine! #${item.codigo} - ${item.titulo} por ${item.preco}: ${item.link}`
+      `Olha esse achadinho que encontrei na vitrine! #${item.codigo} - ${item.titulo} por ${item.preco}: ${item.link}`
     );
 
     return (
@@ -520,6 +621,28 @@ export default function VitrineAfiliadosPage() {
         key={item.id}
         className="group relative flex flex-col bg-white rounded-md sm:rounded-lg shadow-xs hover:shadow-md border border-gray-100 hover:border-[#EE4D2D]/40 transition-all duration-200 overflow-hidden"
       >
+        {/* BARRA DE AÇÃO RÁPIDA DIRETO NO CARD (SÓ APARECE PARA VOCÊ QUANDO LOGADO) */}
+        {adminAutenticado && !isPreview && (
+          <div className="bg-gray-900 text-white px-2 py-1.5 flex items-center justify-between gap-1 text-[11px] font-bold border-b border-gray-800">
+            <button
+              type="button"
+              onClick={(e) => iniciarEdicaoProduto(e, item)}
+              className="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-1 px-2 rounded-xs flex items-center justify-center gap-1 cursor-pointer transition-colors"
+              title="Alterar link, preço ou foto deste produto"
+            >
+              <span>✏️ Editar</span>
+            </button>
+            <button
+              type="button"
+              onClick={(e) => handleExcluirProduto(e, item.id, item.codigo)}
+              className="flex-1 bg-red-600 hover:bg-red-500 text-white py-1 px-2 rounded-xs flex items-center justify-center gap-1 cursor-pointer transition-colors"
+              title="Excluir este produto da vitrine"
+            >
+              <span>🗑️ Excluir</span>
+            </button>
+          </div>
+        )}
+
         {/* Link do Produto */}
         <a
           href={item.link}
@@ -542,24 +665,26 @@ export default function VitrineAfiliadosPage() {
             </span>
 
             {/* Botão de Favoritar (Coração) */}
-            <button
-              type="button"
-              onClick={(e) => toggleFavorito(e, item.id)}
-              aria-label="Salvar nos Favoritos"
-              className={`absolute top-2 right-2 w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center transition-transform active:scale-90 shadow-2xs cursor-pointer ${
-                isFavorito
-                  ? 'bg-red-500 text-white'
-                  : 'bg-white/80 hover:bg-white text-gray-700'
-              }`}
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-4 w-4 fill-current"
-                viewBox="0 0 24 24"
+            {!isPreview && (
+              <button
+                type="button"
+                onClick={(e) => toggleFavorito(e, item.id)}
+                aria-label="Salvar nos Favoritos"
+                className={`absolute top-2 right-2 w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center transition-transform active:scale-90 shadow-2xs cursor-pointer ${
+                  isFavorito
+                    ? 'bg-red-500 text-white'
+                    : 'bg-white/80 hover:bg-white text-gray-700'
+                }`}
               >
-                <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" />
-              </svg>
-            </button>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-4 w-4 fill-current"
+                  viewBox="0 0 24 24"
+                >
+                  <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" />
+                </svg>
+              </button>
+            )}
 
             {/* Tag Em Alta */}
             {item.emAlta && (
@@ -639,7 +764,6 @@ export default function VitrineAfiliadosPage() {
             <span>Ver na Loja</span>
           </a>
 
-          {/* Botão de WhatsApp */}
           <a
             href={`https://api.whatsapp.com/send?text=${msgWhats}`}
             target="_blank"
@@ -663,19 +787,115 @@ export default function VitrineAfiliadosPage() {
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-100 text-gray-900">
+      {/* =================================================================== */}
+      {/* BARRA FLUTUANTE EXCLUSIVA DO PROPRIETÁRIO (SÓ APARECE PARA VOCÊ!)   */}
+      {/* =================================================================== */}
+      {adminAutenticado && (
+        <div className="bg-gray-900 text-white px-3 sm:px-6 py-2 text-xs border-b border-gray-800">
+          <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="bg-[#FFE600] text-gray-900 font-extrabold px-2 py-0.5 rounded-xs text-[10px] uppercase">
+                👑 Modo Proprietário (Só você vê)
+              </span>
+              {statusSalvamento && (
+                <span className="text-green-400 font-bold">{statusSalvamento}</span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  cancelarEdicao();
+                  setSecaoAtiva('admin');
+                }}
+                className={`px-3 py-1 rounded-md font-bold transition-colors cursor-pointer ${
+                  secaoAtiva === 'admin'
+                    ? 'bg-[#EE4D2D] text-white'
+                    : 'bg-green-600 hover:bg-green-500 text-white'
+                }`}
+              >
+                ➕ Adicionar Novo Link
+              </button>
+
+              {secaoAtiva === 'admin' && (
+                <button
+                  type="button"
+                  onClick={() => setSecaoAtiva('tudo')}
+                  className="px-3 py-1 rounded-md bg-white/15 hover:bg-white/25 text-white font-semibold cursor-pointer"
+                >
+                  👁️ Ver Página Principal
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setAdminAutenticado(false);
+                  localStorage.removeItem('afiliado_admin_auth');
+                  if (secaoAtiva === 'admin') setSecaoAtiva('tudo');
+                }}
+                className="px-2.5 py-1 rounded-md bg-red-500/20 hover:bg-red-500/40 text-red-200 font-semibold cursor-pointer"
+                title="Oculta os botões de edição (digite #1234 na busca para ativar novamente)"
+              >
+                Ocultar Admin
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL SECRETO DE PIN (SÓ ABRE QUANDO VOCÊ ATIVA O ATALHO SECRETO) */}
+      {modalPinAberto && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-lg max-w-sm w-full p-6 text-center relative">
+            <button
+              type="button"
+              onClick={() => setModalPinAberto(false)}
+              className="absolute top-3 right-3 text-gray-400 hover:text-gray-700 font-bold text-sm cursor-pointer"
+            >
+              ✕
+            </button>
+            <div className="w-12 h-12 rounded-full bg-gray-900 text-[#FFE600] flex items-center justify-center mx-auto mb-3 text-xl font-bold">
+              🔒
+            </div>
+            <h2 className="text-base font-extrabold text-gray-900">
+              Acesso Exclusivo do Proprietário
+            </h2>
+            <p className="text-xs text-gray-500 mt-1">
+              Digite sua senha para liberar a adição, edição e exclusão de links neste dispositivo.
+            </p>
+            <form onSubmit={handleLoginAdmin} className="mt-4 space-y-3">
+              <input
+                type="password"
+                autoFocus
+                value={pinDigitado}
+                onChange={(e) => setPinDigitado(e.target.value)}
+                placeholder="PIN Secreto (1234)"
+                className="w-full text-center text-base font-bold tracking-widest border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:border-[#EE4D2D]"
+              />
+              {erroPin && <p className="text-xs text-red-600 font-semibold">{erroPin}</p>}
+              <button
+                type="submit"
+                className="w-full bg-[#EE4D2D] hover:bg-[#d84325] text-white font-bold text-sm py-2.5 rounded-lg cursor-pointer"
+              >
+                Liberar Modo Proprietário
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Cabeçalho Responsivo (Estilo Mercado Livre) */}
       <header className="sticky top-0 z-30 w-full bg-[#FFE600] shadow-xs border-b border-yellow-400/60">
         <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-2.5 sm:py-3.5">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2.5 md:gap-6">
-            {/* Marca */}
+            {/* Marca (Clicar 5x ativa o modo secreto do dono) */}
             <div className="flex items-center justify-between">
               <button
                 type="button"
-                onClick={() => {
-                  setBuscaCodigo('');
-                  setSecaoAtiva('tudo');
-                }}
-                className="flex items-center gap-2 text-left cursor-pointer"
+                onClick={handleCliqueLogo}
+                className="flex items-center gap-2 text-left cursor-pointer select-none"
               >
                 <span className="inline-flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-gray-900 text-[#FFE600] font-black text-sm sm:text-base shadow-2xs">
                   AF
@@ -690,7 +910,7 @@ export default function VitrineAfiliadosPage() {
                 </div>
               </button>
 
-              {/* Botões Rápidos no Mobile */}
+              {/* Botões Rápidos no Mobile (Sem botão Admin visível para clientes!) */}
               <div className="flex md:hidden items-center gap-2">
                 <button
                   type="button"
@@ -709,14 +929,6 @@ export default function VitrineAfiliadosPage() {
                       {favoritosIds.length}
                     </span>
                   )}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setSecaoAtiva('admin')}
-                  className="text-[11px] font-bold text-white bg-gray-900 px-2.5 py-1 rounded-full shadow-2xs cursor-pointer"
-                >
-                  🔒 Admin
                 </button>
               </div>
             </div>
@@ -741,8 +953,8 @@ export default function VitrineAfiliadosPage() {
               <input
                 type="text"
                 value={buscaCodigo}
-                onChange={(e) => setBuscaCodigo(e.target.value)}
-                placeholder="Buscar código do look (ex: 012) ou produto..."
+                onChange={(e) => handleBuscaChange(e.target.value)}
+                placeholder="Buscar código do look (ex: 012)"
                 className="w-full bg-transparent text-sm sm:text-base text-gray-800 placeholder-gray-400 focus:outline-none"
               />
 
@@ -758,8 +970,12 @@ export default function VitrineAfiliadosPage() {
               )}
             </div>
 
-            {/* Botões Desktop: Favoritos + Admin */}
+            {/* Botões Desktop para Clientes: Frete Grátis + Favoritos */}
             <div className="hidden md:flex items-center gap-2.5 shrink-0">
+              <div className="flex items-center gap-1.5 bg-white/75 px-3 py-1.5 rounded-full text-xs font-bold text-gray-900 shadow-2xs">
+                <span className="text-[#00A650]">⚡</span> Frete Grátis
+              </div>
+
               <button
                 type="button"
                 onClick={() => setSecaoAtiva('favoritos')}
@@ -771,18 +987,6 @@ export default function VitrineAfiliadosPage() {
               >
                 <span className="text-red-500">❤️</span>
                 <span>Favoritos ({favoritosIds.length})</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setSecaoAtiva('admin')}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold shadow-2xs transition-colors cursor-pointer ${
-                  secaoAtiva === 'admin'
-                    ? 'bg-[#EE4D2D] text-white'
-                    : 'bg-gray-900 text-[#FFE600] hover:bg-gray-800'
-                }`}
-              >
-                <span>🔒 Minha Área (Admin)</span>
               </button>
             </div>
           </div>
@@ -853,17 +1057,20 @@ export default function VitrineAfiliadosPage() {
               ❤️ Salvos ({favoritosIds.length})
             </button>
 
-            <button
-              type="button"
-              onClick={() => setSecaoAtiva('admin')}
-              className={`shrink-0 px-4 py-1.5 rounded-full text-xs sm:text-sm font-bold border transition-all cursor-pointer ${
-                secaoAtiva === 'admin'
-                  ? 'bg-purple-700 text-white border-purple-700 shadow-2xs'
-                  : 'bg-purple-50 text-purple-800 border-purple-200 hover:bg-purple-100'
-              }`}
-            >
-              ➕ Cadastrar Produto
-            </button>
+            {/* A ABA DE GERENCIAR/CADASTRAR SÓ APARECE SE FOR VOCÊ (ADMIN AUTENTICADO) */}
+            {adminAutenticado && (
+              <button
+                type="button"
+                onClick={() => setSecaoAtiva('admin')}
+                className={`shrink-0 px-4 py-1.5 rounded-full text-xs sm:text-sm font-bold border transition-all cursor-pointer ${
+                  secaoAtiva === 'admin'
+                    ? 'bg-purple-700 text-white border-purple-700 shadow-2xs'
+                    : 'bg-purple-50 text-purple-800 border-purple-300 hover:bg-purple-100'
+                }`}
+              >
+                ➕ Gerenciar / Adicionar Links
+              </button>
+            )}
           </div>
 
           {secaoAtiva !== 'admin' && (
@@ -895,516 +1102,493 @@ export default function VitrineAfiliadosPage() {
         )}
 
         {/* ========================================================= */}
-        {/* ABA EXCLUSIVA DO PROPRIETÁRIO: MINHA ÁREA (ADMIN)         */}
+        {/* ABA EXCLUSIVA DO PROPRIETÁRIO (SÓ APARECE PARA VOCÊ)      */}
         {/* ========================================================= */}
-        {secaoAtiva === 'admin' && (
-          <section className="max-w-5xl mx-auto">
-            {!adminAutenticado ? (
-              <div className="max-w-md mx-auto bg-white rounded-xl shadow-sm border border-gray-200 p-6 sm:p-8 text-center my-6">
-                <div className="w-12 h-12 rounded-full bg-gray-900 text-[#FFE600] flex items-center justify-center mx-auto mb-3 text-xl font-bold">
-                  🔒
-                </div>
-                <h2 className="text-lg font-extrabold text-gray-900">
-                  Minha Área • Acesso Restrito
-                </h2>
-                <p className="text-xs text-gray-500 mt-1">
-                  Digite seu PIN de administrador para adicionar ou remover produtos afiliados da vitrine.
+        {secaoAtiva === 'admin' && adminAutenticado && (
+          <section className="max-w-5xl mx-auto space-y-8">
+            {/* Cabeçalho do Painel Admin */}
+            <div className="bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 text-white rounded-xl p-4 sm:p-6 shadow-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <span className="inline-block text-[10px] font-extrabold uppercase tracking-wider bg-[#FFE600] text-gray-900 px-2 py-0.5 rounded-xs mb-1">
+                  👑 Painel Secreto do Proprietário
+                </span>
+                <h1 className="text-lg sm:text-2xl font-extrabold">
+                  {idEmEdicao
+                    ? `✏️ Editando Produto / Link #${novoCodigo}`
+                    : '➕ Adicionar Novo Link Afiliado'}
+                </h1>
+                <p className="text-xs sm:text-sm text-gray-300 mt-0.5">
+                  Toda alteração feita aqui salva automaticamente na vitrine e separa por categoria.
                 </p>
-
-                <form onSubmit={handleLoginAdmin} className="mt-5 space-y-3">
-                  <input
-                    type="password"
-                    value={pinDigitado}
-                    onChange={(e) => setPinDigitado(e.target.value)}
-                    placeholder="Digite o PIN (Padrão: 1234)"
-                    className="w-full text-center text-base font-bold tracking-widest border border-gray-300 rounded-lg px-4 py-2.5 focus:outline-none focus:border-[#EE4D2D]"
-                  />
-                  {erroPin && <p className="text-xs text-red-600 font-semibold">{erroPin}</p>}
-                  <button
-                    type="submit"
-                    className="w-full bg-[#EE4D2D] hover:bg-[#d84325] text-white font-bold text-sm py-2.5 rounded-lg transition-colors cursor-pointer"
-                  >
-                    Entrar no Painel
-                  </button>
-                </form>
               </div>
-            ) : (
-              <div className="space-y-8">
-                {/* Cabeçalho do Painel Admin */}
-                <div className="bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 text-white rounded-xl p-4 sm:p-6 shadow-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+
+              <div className="flex items-center gap-2 self-start sm:self-center">
+                {idEmEdicao && (
+                  <button
+                    type="button"
+                    onClick={cancelarEdicao}
+                    className="px-3.5 py-2 rounded-lg bg-yellow-500 text-gray-900 text-xs font-extrabold cursor-pointer"
+                  >
+                    Cancelar Edição
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSecaoAtiva('tudo')}
+                  className="px-3.5 py-2 rounded-lg bg-white/15 hover:bg-white/25 text-xs font-semibold cursor-pointer"
+                >
+                  👁️ Voltar para a Vitrine
+                </button>
+              </div>
+            </div>
+
+            {mensagemSucesso && (
+              <div className="bg-green-50 border border-green-300 text-green-900 rounded-lg p-4 text-xs sm:text-sm font-bold flex items-center justify-between shadow-2xs">
+                <span>✅ {mensagemSucesso}</span>
+                <button
+                  type="button"
+                  onClick={() => setSecaoAtiva('tudo')}
+                  className="bg-[#00A650] text-white px-3 py-1 rounded-md text-xs font-bold cursor-pointer"
+                >
+                  Ver na vitrine →
+                </button>
+              </div>
+            )}
+
+            {/* Formulário Inteligente + Pré-visualização */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <form
+                onSubmit={handleSalvarProduto}
+                className="lg:col-span-2 bg-white rounded-xl shadow-xs border border-gray-200 p-4 sm:p-6 space-y-4"
+              >
+                <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                  <h2 className="text-sm sm:text-base font-extrabold text-gray-900">
+                    {idEmEdicao ? '1. Alterar Dados e Link' : '1. Dados do Novo Link'}
+                  </h2>
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-purple-700 bg-purple-50 px-2.5 py-1 rounded-full cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={autoClassificar}
+                      onChange={(e) => setAutoClassificar(e.target.checked)}
+                      className="accent-purple-700"
+                    />
+                    <span>✨ Auto-detectar categoria</span>
+                  </label>
+                </div>
+
+                {/* Seu Link de Afiliado em Destaque no Topo */}
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">
+                    🔗 Seu Link de Afiliado (Shopee / Mercado Livre) *
+                  </label>
+                  <input
+                    type="url"
+                    required
+                    value={novoLink}
+                    onChange={(e) => handleLinkChange(e.target.value)}
+                    placeholder="Cole aqui o seu link de afiliado (https://...)"
+                    className="w-full border-2 border-[#EE4D2D]/40 bg-orange-50/20 rounded-lg px-3.5 py-2.5 text-sm font-medium focus:outline-none focus:border-[#EE4D2D]"
+                  />
+                </div>
+
+                {/* Título */}
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">
+                    Título do Produto *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={novoTitulo}
+                    onChange={(e) => handleTituloChange(e.target.value)}
+                    placeholder="Ex: Vestido Longo Vermelho Natal, Camisa Masculina Linho, Caixa de Som Bluetooth..."
+                    className="w-full border border-gray-300 rounded-lg px-3.5 py-2 text-sm focus:outline-none focus:border-[#EE4D2D]"
+                  />
+                </div>
+
+                {/* Preços e Código */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
-                    <span className="inline-block text-[10px] font-extrabold uppercase tracking-wider bg-[#FFE600] text-gray-900 px-2 py-0.5 rounded-xs mb-1">
-                      Painel Exclusivo do Afiliado
-                    </span>
-                    <h1 className="text-lg sm:text-2xl font-extrabold">
-                      Cadastrar Novo Produto Afiliado
-                    </h1>
-                    <p className="text-xs sm:text-sm text-gray-300 mt-0.5">
-                      Adicione o produto abaixo e ele será separado automaticamente no site por departamento e categoria.
-                    </p>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">
+                      Preço em Oferta (R$) *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={novoPreco}
+                      onChange={(e) => setNovoPreco(e.target.value)}
+                      placeholder="Ex: 129,90"
+                      className="w-full border border-gray-300 rounded-lg px-3.5 py-2 text-sm font-bold text-gray-900 focus:outline-none focus:border-[#EE4D2D]"
+                    />
                   </div>
 
-                  <div className="flex items-center gap-2 self-start sm:self-center">
-                    <button
-                      type="button"
-                      onClick={() => setSecaoAtiva('tudo')}
-                      className="px-3.5 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-semibold cursor-pointer"
-                    >
-                      👁️ Ver Vitrine
-                    </button>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">
+                      Preço Antigo (Opcional)
+                    </label>
+                    <input
+                      type="text"
+                      value={novoPrecoAntigo}
+                      onChange={(e) => setNovoPrecoAntigo(e.target.value)}
+                      placeholder="Ex: 179,90"
+                      className="w-full border border-gray-300 rounded-lg px-3.5 py-2 text-sm focus:outline-none focus:border-[#EE4D2D]"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">
+                      Código na Vitrine (#) *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={novoCodigo}
+                      onChange={(e) => setNovoCodigo(e.target.value)}
+                      placeholder="Ex: 009"
+                      className="w-full border border-gray-300 rounded-lg px-3.5 py-2 text-sm font-extrabold focus:outline-none focus:border-[#EE4D2D]"
+                    />
+                  </div>
+                </div>
+
+                {/* Link da Foto */}
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">
+                    🖼️ Link da Imagem do Produto (URL) *
+                  </label>
+                  <input
+                    type="url"
+                    required
+                    value={novaImagem}
+                    onChange={(e) => setNovaImagem(e.target.value)}
+                    placeholder="Cole a URL da foto do produto (https://...)"
+                    className="w-full border border-gray-300 rounded-lg px-3.5 py-2 text-sm focus:outline-none focus:border-[#EE4D2D]"
+                  />
+                </div>
+
+                {/* Classificação Automática */}
+                <div className="pt-3 border-t border-gray-100">
+                  <h3 className="text-xs sm:text-sm font-extrabold text-gray-900 mb-2.5">
+                    2. Categoria no Site (Separado Automaticamente)
+                  </h3>
+
+                  <div className="grid grid-cols-3 gap-2 mb-3">
                     <button
                       type="button"
                       onClick={() => {
-                        setAdminAutenticado(false);
-                        localStorage.removeItem('afiliado_admin_auth');
+                        setNovoDepartamento('looks');
+                        setNovaCategoria(novoGenero);
                       }}
-                      className="px-3 py-2 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-200 text-xs font-semibold cursor-pointer"
+                      className={`py-2.5 px-3 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
+                        novoDepartamento === 'looks'
+                          ? 'bg-[#EE4D2D] text-white border-[#EE4D2D] shadow-2xs'
+                          : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100'
+                      }`}
                     >
-                      Sair
+                      👗 Moda / Looks
                     </button>
-                  </div>
-                </div>
 
-                {mensagemSucesso && (
-                  <div className="bg-green-50 border border-green-300 text-green-900 rounded-lg p-4 text-xs sm:text-sm font-bold flex items-center justify-between shadow-2xs">
-                    <span>✅ {mensagemSucesso}</span>
                     <button
                       type="button"
-                      onClick={() => setSecaoAtiva('tudo')}
-                      className="bg-[#00A650] text-white px-3 py-1 rounded-md text-xs font-bold cursor-pointer"
+                      onClick={() => {
+                        setNovoDepartamento('decoracao');
+                        setNovaCategoria('Árvores & Guirlandas');
+                      }}
+                      className={`py-2.5 px-3 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
+                        novoDepartamento === 'decoracao'
+                          ? 'bg-[#00A650] text-white border-[#00A650] shadow-2xs'
+                          : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100'
+                      }`}
                     >
-                      Ver no site →
+                      🎄 Decoração
                     </button>
-                  </div>
-                )}
-
-                {/* Formulário Inteligente */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  <form
-                    onSubmit={handleCadastrarProduto}
-                    className="lg:col-span-2 bg-white rounded-xl shadow-xs border border-gray-200 p-4 sm:p-6 space-y-4"
-                  >
-                    <div className="flex items-center justify-between border-b border-gray-100 pb-3">
-                      <h2 className="text-sm sm:text-base font-extrabold text-gray-900">
-                        1. Dados do Produto
-                      </h2>
-                      <label className="flex items-center gap-1.5 text-xs font-semibold text-purple-700 bg-purple-50 px-2.5 py-1 rounded-full cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={autoClassificar}
-                          onChange={(e) => setAutoClassificar(e.target.checked)}
-                          className="accent-purple-700"
-                        />
-                        <span>✨ Auto-detectar categoria pelo título</span>
-                      </label>
-                    </div>
-
-                    {/* Título */}
-                    <div>
-                      <label className="block text-xs font-bold text-gray-700 mb-1">
-                        Título do Produto *
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={novoTitulo}
-                        onChange={(e) => handleTituloChange(e.target.value)}
-                        placeholder="Ex: Vestido Longo Vermelho Natal, Camisa Masculina Linho, Caixa de Som Bluetooth..."
-                        className="w-full border border-gray-300 rounded-lg px-3.5 py-2 text-sm focus:outline-none focus:border-[#EE4D2D]"
-                      />
-                    </div>
-
-                    {/* Preços e Código */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div>
-                        <label className="block text-xs font-bold text-gray-700 mb-1">
-                          Preço em Oferta (R$) *
-                        </label>
-                        <input
-                          type="text"
-                          required
-                          value={novoPreco}
-                          onChange={(e) => setNovoPreco(e.target.value)}
-                          placeholder="Ex: 129,90"
-                          className="w-full border border-gray-300 rounded-lg px-3.5 py-2 text-sm font-bold text-gray-900 focus:outline-none focus:border-[#EE4D2D]"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-gray-700 mb-1">
-                          Preço Antigo (Opcional)
-                        </label>
-                        <input
-                          type="text"
-                          value={novoPrecoAntigo}
-                          onChange={(e) => setNovoPrecoAntigo(e.target.value)}
-                          placeholder="Ex: 179,90"
-                          className="w-full border border-gray-300 rounded-lg px-3.5 py-2 text-sm focus:outline-none focus:border-[#EE4D2D]"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-gray-700 mb-1">
-                          Código na Vitrine (#) *
-                        </label>
-                        <input
-                          type="text"
-                          required
-                          value={novoCodigo}
-                          onChange={(e) => setNovoCodigo(e.target.value)}
-                          placeholder="Ex: 009"
-                          className="w-full border border-gray-300 rounded-lg px-3.5 py-2 text-sm font-extrabold focus:outline-none focus:border-[#EE4D2D]"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Links */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs font-bold text-gray-700 mb-1">
-                          Seu Link de Afiliado (Shopee / Mercado Livre) *
-                        </label>
-                        <input
-                          type="url"
-                          required
-                          value={novoLink}
-                          onChange={(e) => handleLinkChange(e.target.value)}
-                          placeholder="https://shopee.com.br/... ou https://mercadolivre.com/..."
-                          className="w-full border border-gray-300 rounded-lg px-3.5 py-2 text-sm focus:outline-none focus:border-[#EE4D2D]"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-gray-700 mb-1">
-                          Link da Imagem do Produto (URL) *
-                        </label>
-                        <input
-                          type="url"
-                          required
-                          value={novaImagem}
-                          onChange={(e) => setNovaImagem(e.target.value)}
-                          placeholder="Cole a URL da foto (https://...)"
-                          className="w-full border border-gray-300 rounded-lg px-3.5 py-2 text-sm focus:outline-none focus:border-[#EE4D2D]"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Classificação */}
-                    <div className="pt-3 border-t border-gray-100">
-                      <h3 className="text-xs sm:text-sm font-extrabold text-gray-900 mb-2.5">
-                        2. Onde este produto vai aparecer? (Separado Automaticamente)
-                      </h3>
-
-                      <div className="grid grid-cols-3 gap-2 mb-3">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setNovoDepartamento('looks');
-                            setNovaCategoria(novoGenero);
-                          }}
-                          className={`py-2.5 px-3 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
-                            novoDepartamento === 'looks'
-                              ? 'bg-[#EE4D2D] text-white border-[#EE4D2D] shadow-2xs'
-                              : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100'
-                          }`}
-                        >
-                          👗 Moda / Looks
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setNovoDepartamento('decoracao');
-                            setNovaCategoria('Árvores & Guirlandas');
-                          }}
-                          className={`py-2.5 px-3 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
-                            novoDepartamento === 'decoracao'
-                              ? 'bg-[#00A650] text-white border-[#00A650] shadow-2xs'
-                              : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100'
-                          }`}
-                        >
-                          🎄 Decoração
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setNovoDepartamento('tecnologia');
-                            setNovaCategoria('Smartphones & Acessórios');
-                          }}
-                          className={`py-2.5 px-3 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
-                            novoDepartamento === 'tecnologia'
-                              ? 'bg-blue-600 text-white border-blue-600 shadow-2xs'
-                              : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100'
-                          }`}
-                        >
-                          📱 Tecnologia
-                        </button>
-                      </div>
-
-                      {/* Sub-opções */}
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-gray-50 p-3.5 rounded-lg border border-gray-200/80">
-                        {novoDepartamento === 'looks' && (
-                          <div>
-                            <label className="block text-[11px] font-bold text-gray-600 mb-1">
-                              Gênero (Masculino / Feminino):
-                            </label>
-                            <select
-                              value={novoGenero}
-                              onChange={(e) => {
-                                const g = e.target.value as GeneroLook;
-                                setNovoGenero(g);
-                                setNovaCategoria(g);
-                              }}
-                              className="w-full bg-white border border-gray-300 rounded-md px-2.5 py-1.5 text-xs font-semibold"
-                            >
-                              <option value="Feminino">👩 Feminino</option>
-                              <option value="Masculino">👨 Masculino</option>
-                              <option value="Unissex">✨ Unissex</option>
-                            </select>
-                          </div>
-                        )}
-
-                        {novoDepartamento === 'decoracao' && (
-                          <>
-                            <div>
-                              <label className="block text-[11px] font-bold text-gray-600 mb-1">
-                                Categoria de Decoração:
-                              </label>
-                              <select
-                                value={novaCategoria}
-                                onChange={(e) => setNovaCategoria(e.target.value)}
-                                className="w-full bg-white border border-gray-300 rounded-md px-2.5 py-1.5 text-xs font-semibold"
-                              >
-                                {SUBCATEGORIAS_DECORACAO.filter((s) => s !== 'Todas').map((s) => (
-                                  <option key={s} value={s}>
-                                    {s}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-
-                            <div>
-                              <label className="block text-[11px] font-bold text-gray-600 mb-1">
-                                Ambiente:
-                              </label>
-                              <select
-                                value={novoAmbiente}
-                                onChange={(e) => setNovoAmbiente(e.target.value)}
-                                className="w-full bg-white border border-gray-300 rounded-md px-2.5 py-1.5 text-xs font-semibold"
-                              >
-                                {AMBIENTES_DECORACAO.filter((a) => a !== 'Todos Ambientes').map(
-                                  (a) => (
-                                    <option key={a} value={a}>
-                                      {a}
-                                    </option>
-                                  )
-                                )}
-                              </select>
-                            </div>
-                          </>
-                        )}
-
-                        {novoDepartamento === 'tecnologia' && (
-                          <div>
-                            <label className="block text-[11px] font-bold text-gray-600 mb-1">
-                              Categoria de Tecnologia:
-                            </label>
-                            <select
-                              value={novaCategoria}
-                              onChange={(e) => setNovaCategoria(e.target.value)}
-                              className="w-full bg-white border border-gray-300 rounded-md px-2.5 py-1.5 text-xs font-semibold"
-                            >
-                              {SUBCATEGORIAS_TECNOLOGIA.filter((t) => t !== 'Todas').map((t) => (
-                                <option key={t} value={t}>
-                                  {t}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        )}
-
-                        <div>
-                          <label className="block text-[11px] font-bold text-gray-600 mb-1">
-                            Ocasião / Campanha:
-                          </label>
-                          <select
-                            value={novaOcasiao}
-                            onChange={(e) => setNovaOcasiao(e.target.value as OcasiaoFesta)}
-                            className="w-full bg-white border border-gray-300 rounded-md px-2.5 py-1.5 text-xs font-semibold"
-                          >
-                            <option value="Natal">🎄 Natal</option>
-                            <option value="Réveillon">🥂 Réveillon</option>
-                            <option value="Ambas">✨ Natal &amp; Réveillon (Ambas)</option>
-                          </select>
-                        </div>
-
-                        <div>
-                          <label className="block text-[11px] font-bold text-gray-600 mb-1">
-                            Loja do Link:
-                          </label>
-                          <select
-                            value={novaLoja}
-                            onChange={(e) =>
-                              setNovaLoja(e.target.value as 'Shopee' | 'Mercado Livre' | 'Outra')
-                            }
-                            className="w-full bg-white border border-gray-300 rounded-md px-2.5 py-1.5 text-xs font-semibold"
-                          >
-                            <option value="Shopee">🧡 Shopee</option>
-                            <option value="Mercado Livre">💛 Mercado Livre</option>
-                            <option value="Outra">🛒 Outra Loja</option>
-                          </select>
-                        </div>
-                      </div>
-                    </div>
 
                     <button
-                      type="submit"
-                      className="w-full bg-[#EE4D2D] hover:bg-[#d84325] text-white font-extrabold text-sm py-3 rounded-lg shadow-sm transition-colors cursor-pointer"
+                      type="button"
+                      onClick={() => {
+                        setNovoDepartamento('tecnologia');
+                        setNovaCategoria('Smartphones & Acessórios');
+                      }}
+                      className={`py-2.5 px-3 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
+                        novoDepartamento === 'tecnologia'
+                          ? 'bg-blue-600 text-white border-blue-600 shadow-2xs'
+                          : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100'
+                      }`}
                     >
-                      ➕ Publicar Produto na Vitrine Agora
+                      📱 Tecnologia
                     </button>
-                  </form>
+                  </div>
 
-                  {/* Pré-visualização do Card */}
-                  <div className="bg-white rounded-xl shadow-xs border border-gray-200 p-4 sm:p-5 flex flex-col items-center">
-                    <span className="text-xs font-extrabold uppercase tracking-wider text-gray-400 mb-3">
-                      Pré-visualização do Card
-                    </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-gray-50 p-3.5 rounded-lg border border-gray-200/80">
+                    {novoDepartamento === 'looks' && (
+                      <div>
+                        <label className="block text-[11px] font-bold text-gray-600 mb-1">
+                          Gênero (Masculino / Feminino):
+                        </label>
+                        <select
+                          value={novoGenero}
+                          onChange={(e) => {
+                            const g = e.target.value as GeneroLook;
+                            setNovoGenero(g);
+                            setNovaCategoria(g);
+                          }}
+                          className="w-full bg-white border border-gray-300 rounded-md px-2.5 py-1.5 text-xs font-semibold"
+                        >
+                          <option value="Feminino">👩 Feminino</option>
+                          <option value="Masculino">👨 Masculino</option>
+                          <option value="Unissex">✨ Unissex</option>
+                        </select>
+                      </div>
+                    )}
 
-                    <div className="w-full max-w-[230px]">
-                      {renderCardProduto({
-                        id: 'preview',
-                        codigo: novoCodigo || '009',
-                        titulo:
-                          novoTitulo ||
-                          'Título do seu produto aparecerá aqui em até duas linhas...',
-                        preco:
-                          precoAtualNum > 0
-                            ? formatarMoeda(precoAtualNum)
-                            : 'R$ 99,90',
-                        precoNumerico: precoAtualNum || 99.9,
-                        precoAntigo:
-                          precoAntigoNum > 0 ? formatarMoeda(precoAntigoNum) : 'R$ 149,90',
-                        desconto: descontoCalculado || '33% OFF',
-                        departamento: novoDepartamento,
-                        categoria:
-                          novoDepartamento === 'looks' ? novoGenero : novaCategoria,
-                        genero: novoDepartamento === 'looks' ? novoGenero : undefined,
-                        ocasiao: novaOcasiao,
-                        ambiente: novoAmbiente,
-                        loja: novaLoja,
-                        avaliacao: '4.9',
-                        vendidos: 'Novo na vitrine 🔥',
-                        emAlta: true,
-                        freteGratis: true,
-                        imagem:
-                          novaImagem ||
-                          'https://images.unsplash.com/photo-1513297887119-d46091b24bfa?auto=format&fit=crop&w=700&q=80',
-                        link: novoLink || '#',
-                      })}
+                    {novoDepartamento === 'decoracao' && (
+                      <>
+                        <div>
+                          <label className="block text-[11px] font-bold text-gray-600 mb-1">
+                            Categoria de Decoração:
+                          </label>
+                          <select
+                            value={novaCategoria}
+                            onChange={(e) => setNovaCategoria(e.target.value)}
+                            className="w-full bg-white border border-gray-300 rounded-md px-2.5 py-1.5 text-xs font-semibold"
+                          >
+                            {SUBCATEGORIAS_DECORACAO.filter((s) => s !== 'Todas').map((s) => (
+                              <option key={s} value={s}>
+                                {s}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-gray-600 mb-1">
+                            Ambiente:
+                          </label>
+                          <select
+                            value={novoAmbiente}
+                            onChange={(e) => setNovoAmbiente(e.target.value)}
+                            className="w-full bg-white border border-gray-300 rounded-md px-2.5 py-1.5 text-xs font-semibold"
+                          >
+                            {AMBIENTES_DECORACAO.filter((a) => a !== 'Todos Ambientes').map((a) => (
+                              <option key={a} value={a}>
+                                {a}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </>
+                    )}
+
+                    {novoDepartamento === 'tecnologia' && (
+                      <div>
+                        <label className="block text-[11px] font-bold text-gray-600 mb-1">
+                          Categoria de Tecnologia:
+                        </label>
+                        <select
+                          value={novaCategoria}
+                          onChange={(e) => setNovaCategoria(e.target.value)}
+                          className="w-full bg-white border border-gray-300 rounded-md px-2.5 py-1.5 text-xs font-semibold"
+                        >
+                          {SUBCATEGORIAS_TECNOLOGIA.filter((t) => t !== 'Todas').map((t) => (
+                            <option key={t} value={t}>
+                              {t}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-gray-600 mb-1">
+                        Ocasião / Campanha:
+                      </label>
+                      <select
+                        value={novaOcasiao}
+                        onChange={(e) => setNovaOcasiao(e.target.value as OcasiaoFesta)}
+                        className="w-full bg-white border border-gray-300 rounded-md px-2.5 py-1.5 text-xs font-semibold"
+                      >
+                        <option value="Natal">🎄 Natal</option>
+                        <option value="Réveillon">🥂 Réveillon</option>
+                        <option value="Ambas">✨ Natal &amp; Réveillon</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-gray-600 mb-1">
+                        Loja do Link:
+                      </label>
+                      <select
+                        value={novaLoja}
+                        onChange={(e) =>
+                          setNovaLoja(e.target.value as 'Shopee' | 'Mercado Livre' | 'Outra')
+                        }
+                        className="w-full bg-white border border-gray-300 rounded-md px-2.5 py-1.5 text-xs font-semibold"
+                      >
+                        <option value="Shopee">🧡 Shopee</option>
+                        <option value="Mercado Livre">💛 Mercado Livre</option>
+                        <option value="Outra">🛒 Outra Loja</option>
+                      </select>
                     </div>
                   </div>
                 </div>
 
-                {/* Lista de Produtos Cadastrados com botão de Copiar Mensagem de Divulgação */}
-                <div className="bg-white rounded-xl shadow-xs border border-gray-200 p-4 sm:p-6">
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-4 border-b border-gray-100">
-                    <div>
-                      <h2 className="text-base font-extrabold text-gray-900">
-                        Produtos Ativos na Vitrine ({catalogo.length})
-                      </h2>
-                      <p className="text-xs text-gray-500">
-                        Copie a mensagem pronta de divulgação para seu WhatsApp / TikTok ou exclua produtos esgotados.
-                      </p>
-                    </div>
+                <button
+                  type="submit"
+                  className="w-full bg-[#EE4D2D] hover:bg-[#d84325] text-white font-extrabold text-sm py-3 rounded-lg shadow-sm transition-colors cursor-pointer"
+                >
+                  {idEmEdicao
+                    ? '💾 Salvar Alterações do Link / Produto'
+                    : '➕ Adicionar Link e Salvar Automaticamente'}
+                </button>
+              </form>
 
-                    <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide">
-                      {(['todos', 'looks', 'decoracao', 'tecnologia'] as const).map((dep) => (
-                        <button
-                          key={dep}
-                          type="button"
-                          onClick={() => setFiltroGerenciarDepto(dep)}
-                          className={`px-3 py-1 rounded-full text-xs font-bold border cursor-pointer ${
-                            filtroGerenciarDepto === dep
-                              ? 'bg-gray-900 text-white border-gray-900'
-                              : 'bg-gray-50 text-gray-600 border-gray-200'
-                          }`}
-                        >
-                          {dep === 'todos'
-                            ? 'Todos'
-                            : dep === 'looks'
-                            ? '👗 Moda'
-                            : dep === 'decoracao'
-                            ? '🎄 Decoração'
-                            : '📱 Tecnologia'}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+              {/* Pré-visualização do Card */}
+              <div className="bg-white rounded-xl shadow-xs border border-gray-200 p-4 sm:p-5 flex flex-col items-center">
+                <span className="text-xs font-extrabold uppercase tracking-wider text-gray-400 mb-3">
+                  Pré-visualização Ao Vivo
+                </span>
 
-                  <div className="divide-y divide-gray-100 mt-2 max-h-96 overflow-y-auto">
-                    {catalogo
-                      .filter(
-                        (item) =>
-                          filtroGerenciarDepto === 'todos' ||
-                          item.departamento === filtroGerenciarDepto
-                      )
-                      .map((item) => (
-                        <div
-                          key={item.id}
-                          className="py-3 flex items-center justify-between gap-3"
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <img
-                              src={item.imagem}
-                              alt={item.titulo}
-                              className="w-11 h-14 object-cover rounded-xs bg-gray-100 shrink-0"
-                            />
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className="text-xs font-extrabold bg-black text-white px-1.5 py-0.5 rounded-xs">
-                                  #{item.codigo}
-                                </span>
-                                <span className="text-[11px] font-bold text-[#EE4D2D] bg-[#EE4D2D]/10 px-2 py-0.5 rounded-full">
-                                  {item.departamento.toUpperCase()} • {item.categoria}
-                                </span>
-                                <span className="text-[11px] text-gray-500">
-                                  ({item.loja})
-                                </span>
-                              </div>
-                              <p className="text-xs sm:text-sm font-medium text-gray-800 truncate mt-0.5">
-                                {item.titulo}
-                              </p>
-                              <p className="text-xs font-extrabold text-gray-900">
-                                {item.preco}
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-2 shrink-0">
-                            <button
-                              type="button"
-                              onClick={() => copiarMensagemDivulgacao(item)}
-                              className="text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-md border border-gray-200 flex items-center gap-1 cursor-pointer"
-                            >
-                              {copiadoId === item.id ? '✅ Copiado!' : '📋 Divulgar'}
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => handleExcluirProduto(item.id)}
-                              className="text-xs font-semibold text-red-600 hover:bg-red-50 px-3 py-1.5 rounded-md border border-red-200 cursor-pointer"
-                            >
-                              Excluir
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                  </div>
+                <div className="w-full max-w-[230px]">
+                  {renderCardProduto(
+                    {
+                      id: 'preview',
+                      codigo: novoCodigo || '009',
+                      titulo:
+                        novoTitulo ||
+                        'Título do seu produto aparecerá aqui em até duas linhas...',
+                      preco:
+                        precoAtualNum > 0
+                          ? formatarMoeda(precoAtualNum)
+                          : 'R$ 99,90',
+                      precoNumerico: precoAtualNum || 99.9,
+                      precoAntigo:
+                        precoAntigoNum > 0 ? formatarMoeda(precoAntigoNum) : 'R$ 149,90',
+                      desconto: descontoCalculado || '33% OFF',
+                      departamento: novoDepartamento,
+                      categoria:
+                        novoDepartamento === 'looks' ? novoGenero : novaCategoria,
+                      genero: novoDepartamento === 'looks' ? novoGenero : undefined,
+                      ocasiao: novaOcasiao,
+                      ambiente: novoAmbiente,
+                      loja: novaLoja,
+                      avaliacao: '4.9',
+                      vendidos: 'Novo na vitrine 🔥',
+                      emAlta: true,
+                      freteGratis: true,
+                      imagem:
+                        novaImagem ||
+                        'https://images.unsplash.com/photo-1513297887119-d46091b24bfa?auto=format&fit=crop&w=700&q=80',
+                      link: novoLink || '#',
+                    },
+                    true
+                  )}
                 </div>
               </div>
-            )}
+            </div>
+
+            {/* Lista Completa para Editar ou Excluir Links */}
+            <div className="bg-white rounded-xl shadow-xs border border-gray-200 p-4 sm:p-6">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-4 border-b border-gray-100">
+                <div>
+                  <h2 className="text-base font-extrabold text-gray-900">
+                    Gerenciar Todos os Seus Links ({catalogo.length})
+                  </h2>
+                  <p className="text-xs text-gray-500">
+                    Clique em &ldquo;Editar&rdquo; para trocar um link ou preço, ou em &ldquo;Excluir&rdquo; para remover da página.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide">
+                  {(['todos', 'looks', 'decoracao', 'tecnologia'] as const).map((dep) => (
+                    <button
+                      key={dep}
+                      type="button"
+                      onClick={() => setFiltroGerenciarDepto(dep)}
+                      className={`px-3 py-1 rounded-full text-xs font-bold border cursor-pointer ${
+                        filtroGerenciarDepto === dep
+                          ? 'bg-gray-900 text-white border-gray-900'
+                          : 'bg-gray-50 text-gray-600 border-gray-200'
+                      }`}
+                    >
+                      {dep === 'todos'
+                        ? 'Todos'
+                        : dep === 'looks'
+                        ? '👗 Moda'
+                        : dep === 'decoracao'
+                        ? '🎄 Decoração'
+                        : '📱 Tecnologia'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="divide-y divide-gray-100 mt-2 max-h-96 overflow-y-auto">
+                {catalogo
+                  .filter(
+                    (item) =>
+                      filtroGerenciarDepto === 'todos' ||
+                      item.departamento === filtroGerenciarDepto
+                  )
+                  .map((item) => (
+                    <div
+                      key={item.id}
+                      className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <img
+                          src={item.imagem}
+                          alt={item.titulo}
+                          className="w-11 h-14 object-cover rounded-xs bg-gray-100 shrink-0"
+                        />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-xs font-extrabold bg-black text-white px-1.5 py-0.5 rounded-xs">
+                              #{item.codigo}
+                            </span>
+                            <span className="text-[11px] font-bold text-[#EE4D2D] bg-[#EE4D2D]/10 px-2 py-0.5 rounded-full">
+                              {item.departamento.toUpperCase()} • {item.categoria}
+                            </span>
+                            <span className="text-[11px] text-gray-500">
+                              ({item.loja})
+                            </span>
+                          </div>
+                          <p className="text-xs sm:text-sm font-medium text-gray-800 truncate mt-0.5">
+                            {item.titulo}
+                          </p>
+                          <p className="text-[11px] text-blue-600 truncate">
+                            🔗 {item.link}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                        <button
+                          type="button"
+                          onClick={() => copiarMensagemDivulgacao(item)}
+                          className="text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 px-2.5 py-1.5 rounded-md border border-gray-200 cursor-pointer"
+                        >
+                          {copiadoId === item.id ? '✅ Copiado!' : '📋 Copiar'}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={(e) => iniciarEdicaoProduto(e, item)}
+                          className="text-xs font-semibold text-blue-600 hover:bg-blue-50 px-2.5 py-1.5 rounded-md border border-blue-200 cursor-pointer"
+                        >
+                          ✏️ Editar Link
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={(e) => handleExcluirProduto(e, item.id, item.codigo)}
+                          className="text-xs font-semibold text-red-600 hover:bg-red-50 px-2.5 py-1.5 rounded-md border border-red-200 cursor-pointer"
+                        >
+                          🗑️ Excluir
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
           </section>
         )}
 
@@ -1446,7 +1630,7 @@ export default function VitrineAfiliadosPage() {
               </div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-2.5 sm:gap-4 lg:gap-5">
-                {favoritosFiltrados.map(renderCardProduto)}
+                {favoritosFiltrados.map((item) => renderCardProduto(item))}
               </div>
             )}
           </section>
@@ -1472,7 +1656,6 @@ export default function VitrineAfiliadosPage() {
                 </span>
               </div>
 
-              {/* Pílulas Estilo Shopee */}
               <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide pt-1">
                 {CATEGORIAS_LOOKS.map((categoria) => {
                   const ativo = categoriaLookAtiva === categoria;
@@ -1506,7 +1689,7 @@ export default function VitrineAfiliadosPage() {
               </div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-2.5 sm:gap-4 lg:gap-5">
-                {looksFiltrados.map(renderCardProduto)}
+                {looksFiltrados.map((item) => renderCardProduto(item))}
               </div>
             )}
           </section>
@@ -1532,7 +1715,6 @@ export default function VitrineAfiliadosPage() {
                 </span>
               </div>
 
-              {/* Pílulas de Subcategoria de Decoração */}
               <div className="mt-3 flex items-center gap-2 overflow-x-auto scrollbar-hide">
                 {SUBCATEGORIAS_DECORACAO.map((sub) => {
                   const ativo = subcategoriaDeco === sub;
@@ -1553,7 +1735,6 @@ export default function VitrineAfiliadosPage() {
                 })}
               </div>
 
-              {/* Filtros Extras de Decoração */}
               <div className="mt-3 pt-3 border-t border-gray-100 grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-4">
                 <div>
                   <label className="block text-[11px] font-bold text-gray-500 mb-1">
@@ -1620,7 +1801,7 @@ export default function VitrineAfiliadosPage() {
               </div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-2.5 sm:gap-4 lg:gap-5">
-                {decoracoesFiltradas.map(renderCardProduto)}
+                {decoracoesFiltradas.map((item) => renderCardProduto(item))}
               </div>
             )}
           </section>
@@ -1656,7 +1837,6 @@ export default function VitrineAfiliadosPage() {
                 </div>
               </div>
 
-              {/* Pílulas de Subcategoria de Tecnologia */}
               <div className="mt-3 flex items-center gap-2 overflow-x-auto scrollbar-hide">
                 {SUBCATEGORIAS_TECNOLOGIA.map((sub) => {
                   const ativo = subcategoriaTech === sub;
@@ -1686,26 +1866,22 @@ export default function VitrineAfiliadosPage() {
               </div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-2.5 sm:gap-4 lg:gap-5">
-                {tecnologiaFiltrada.map(renderCardProduto)}
+                {tecnologiaFiltrada.map((item) => renderCardProduto(item))}
               </div>
             )}
           </section>
         )}
       </main>
 
-      {/* Rodapé Responsivo */}
+      {/* Rodapé Responsivo (100% Limpo para os clientes!) */}
       <footer className="w-full bg-white border-t border-gray-200 mt-10 py-6 text-center text-xs text-gray-500">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
           <p className="font-semibold text-gray-700">
             ✨ Achadinhos Festas • Moda, Decoração &amp; Tecnologia
           </p>
-          <button
-            type="button"
-            onClick={() => setSecaoAtiva('admin')}
-            className="text-gray-400 hover:text-gray-700 underline cursor-pointer"
-          >
-            🔒 Acesso do Proprietário (Admin)
-          </button>
+          <p className="text-gray-400">
+            Redirecionamento seguro para lojas oficiais parceiras (Mercado Livre &amp; Shopee).
+          </p>
         </div>
       </footer>
     </div>

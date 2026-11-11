@@ -65,3 +65,4 @@ Acesse em seu navegador: [http://localhost:3000](http://localhost:3000)
 Clique no botão abaixo para fazer o deploy instantâneo na Vercel:
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/LuizGomess19/loja-afiliado)
+
