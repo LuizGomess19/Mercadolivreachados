@@ -29,10 +29,26 @@ create table if not exists public.produtos (
 create index if not exists produtos_criado_em_idx on public.produtos (criado_em desc);
 create index if not exists produtos_departamento_idx on public.produtos (departamento);
 
--- Segurança: RLS ligado e SEM políticas públicas.
--- Ninguém acessa a tabela direto pelo navegador; somente o servidor do site
--- (via SUPABASE_SERVICE_ROLE_KEY) consegue ler e gravar.
+-- Permissões para a Data API do Supabase (funciona tanto com service_role quanto com anon key)
+grant usage on schema public to anon, authenticated, service_role;
+grant all on table public.produtos to anon, authenticated, service_role;
+
 alter table public.produtos enable row level security;
+
+drop policy if exists "Leitura publica de produtos" on public.produtos;
+create policy "Leitura publica de produtos"
+  on public.produtos
+  for select
+  to anon, authenticated, service_role
+  using (true);
+
+drop policy if exists "Gerenciamento de produtos pelo servidor" on public.produtos;
+create policy "Gerenciamento de produtos pelo servidor"
+  on public.produtos
+  for all
+  to anon, authenticated, service_role
+  using (true)
+  with check (true);
 
 -- Produtos iniciais da vitrine (ignorados se já existirem)
 insert into public.produtos (

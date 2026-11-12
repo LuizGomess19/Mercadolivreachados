@@ -43,6 +43,7 @@ type Ordenacao = 'relevancia' | 'menor-preco' | 'maior-preco';
 type SecaoAtiva = 'tudo' | 'looks' | 'decoracao' | 'tecnologia' | 'favoritos' | 'admin';
 
 const CACHE_CATALOGO = 'ml_achados_catalogo_cache';
+const ADMIN_TOKEN_STORAGE = 'ml_achados_admin_token_v1';
 
 export default function VitrineAfiliadosPage() {
   // Catálogo carregado do banco de dados (via /api/produtos)
@@ -50,7 +51,12 @@ export default function VitrineAfiliadosPage() {
   const [carregandoCatalogo, setCarregandoCatalogo] = useState<boolean>(true);
   const [statusSalvamento, setStatusSalvamento] = useState<string>('');
   const [salvando, setSalvando] = useState<boolean>(false);
-  const [bancoPersistente, setBancoPersistente] = useState<boolean | null>(null);
+  const [bancoPersistente, setBancoPersistente] = useState<boolean | null>(true);
+  const [supabaseConectado, setSupabaseConectado] = useState<boolean>(false);
+  const [mostrarConfigSupabase, setMostrarConfigSupabase] = useState<boolean>(false);
+  const [inputSupabaseUrl, setInputSupabaseUrl] = useState<string>('');
+  const [inputSupabaseKey, setInputSupabaseKey] = useState<string>('');
+  const [salvandoSupabase, setSalvandoSupabase] = useState<boolean>(false);
 
   // Lista de Favoritos (Salvo no navegador do visitante)
   const [favoritosIds, setFavoritosIds] = useState<string[]>([]);
@@ -77,6 +83,7 @@ export default function VitrineAfiliadosPage() {
   // ESTADOS EXCLUSIVOS DO PROPRIETÁRIO (SÓ APARECEM PARA VOCÊ)
   // =========================================================================
   const [adminAutenticado, setAdminAutenticado] = useState<boolean>(false);
+  const [adminToken, setAdminToken] = useState<string>('');
   const [modalPinAberto, setModalPinAberto] = useState<boolean>(false);
   const [pinDigitado, setPinDigitado] = useState<string>('');
   const [erroPin, setErroPin] = useState<string>('');
@@ -96,23 +103,72 @@ export default function VitrineAfiliadosPage() {
   const [novaOcasiao, setNovaOcasiao] = useState<OcasiaoFesta>('Natal');
   const [novoAmbiente, setNovoAmbiente] = useState<string>('Sala');
   const [novaLoja, setNovaLoja] = useState<'Shopee' | 'Mercado Livre' | 'Outra'>('Shopee');
+  const [novoVendidos, setNovoVendidos] = useState<string>('Novo na vitrine 🔥');
+  const [novaAvaliacao, setNovaAvaliacao] = useState<string>('4.9');
+  const [novoEmAlta, setNovoEmAlta] = useState<boolean>(true);
+  const [novoFreteGratis, setNovoFreteGratis] = useState<boolean>(true);
   const [autoClassificar, setAutoClassificar] = useState<boolean>(true);
   const [mensagemSucesso, setMensagemSucesso] = useState<string>('');
   const [copiadoId, setCopiadoId] = useState<string>('');
   const [filtroGerenciarDepto, setFiltroGerenciarDepto] = useState<'todos' | DepartamentoProduto>('todos');
 
+  const sincronizarCatalogoDoServidor = async (silencioso = false) => {
+    try {
+      const res = await fetch(`/api/produtos?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' },
+      });
+      if (!res.ok) throw new Error('Falha ao carregar');
+      const data = await res.json();
+      if (Array.isArray(data.produtos)) {
+        setCatalogo(data.produtos);
+        setBancoPersistente(data.persistente !== false);
+        setSupabaseConectado(!!data.supabaseConectado);
+        localStorage.setItem(CACHE_CATALOGO, JSON.stringify(data.produtos));
+      }
+    } catch {
+      if (!silencioso) {
+        const cache = localStorage.getItem(CACHE_CATALOGO);
+        if (cache) {
+          try {
+            setCatalogo(JSON.parse(cache));
+          } catch {
+            // mantém atual
+          }
+        }
+      }
+    } finally {
+      if (!silencioso) setCarregandoCatalogo(false);
+    }
+  };
+
   // Carrega produtos do banco e verifica no servidor se o dono está autenticado
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const pediuAdmin = params.get('admin') === '1' || params.get('admin') === 'true';
+    const tokenSalvo = localStorage.getItem(ADMIN_TOKEN_STORAGE) || '';
+    if (tokenSalvo) setAdminToken(tokenSalvo);
 
     async function verificarSessao() {
       try {
-        const res = await fetch('/api/admin', { cache: 'no-store' });
+        const headers: Record<string, string> = {};
+        if (tokenSalvo) headers['x-admin-token'] = tokenSalvo;
+
+        const res = await fetch(`/api/admin?t=${Date.now()}`, {
+          cache: 'no-store',
+          headers,
+        });
         const data = await res.json();
-        setAdminAutenticado(!!data.autenticado);
+        const aut = !!data.autenticado;
+        setAdminAutenticado(aut);
+        setSupabaseConectado(!!data.supabaseConectado);
+        if (data.supabaseUrl) setInputSupabaseUrl(data.supabaseUrl);
+        if (data.token) {
+          setAdminToken(data.token);
+          localStorage.setItem(ADMIN_TOKEN_STORAGE, data.token);
+        }
         if (pediuAdmin) {
-          if (data.autenticado) setSecaoAtiva('admin');
+          if (aut) setSecaoAtiva('admin');
           else setModalPinAberto(true);
         }
       } catch {
@@ -133,52 +189,53 @@ export default function VitrineAfiliadosPage() {
     localStorage.removeItem('afiliado_admin_auth');
     localStorage.removeItem('afiliado_catalogo_backup');
 
-    async function carregarProdutos() {
-      try {
-        const res = await fetch('/api/produtos', { cache: 'no-store' });
-        if (!res.ok) throw new Error('Falha ao carregar');
-        const data = await res.json();
-        if (Array.isArray(data.produtos)) {
-          setCatalogo(data.produtos);
-          setBancoPersistente(!!data.persistente);
-          // Cache SOMENTE leitura, usado se a internet/servidor falhar
-          localStorage.setItem(CACHE_CATALOGO, JSON.stringify(data.produtos));
-        }
-      } catch {
-        const cache = localStorage.getItem(CACHE_CATALOGO);
-        if (cache) {
-          try {
-            setCatalogo(JSON.parse(cache));
-          } catch {
-            // mantém PRODUTOS_INICIAIS
-          }
-        }
-      }
-      setCarregandoCatalogo(false);
-    }
-
     verificarSessao();
-    carregarProdutos();
+    sincronizarCatalogoDoServidor(false);
+
+    // Mantém todos os visitantes sincronizados em tempo real quando mudam de aba ou a cada 15s
+    const aoFocar = () => sincronizarCatalogoDoServidor(true);
+    const intervalo = window.setInterval(() => {
+      sincronizarCatalogoDoServidor(true);
+    }, 15000);
+
+    window.addEventListener('focus', aoFocar);
+    document.addEventListener('visibilitychange', aoFocar);
+    return () => {
+      window.clearInterval(intervalo);
+      window.removeEventListener('focus', aoFocar);
+      document.removeEventListener('visibilitychange', aoFocar);
+    };
   }, []);
 
   const mostrarStatus = (mensagem: string) => {
     setStatusSalvamento(mensagem);
-    setTimeout(() => setStatusSalvamento(''), 4000);
+    setTimeout(() => setStatusSalvamento(''), 4500);
   };
 
   // Envia uma alteração ao banco. Retorna os dados da resposta ou null em caso de erro.
   const enviarAoBanco = async (
     metodo: 'POST' | 'PUT' | 'DELETE',
-    corpo?: ProdutoAfiliado,
+    corpo?: unknown,
     id?: string
-  ): Promise<{ produto?: ProdutoAfiliado } | null> => {
+  ): Promise<{ produto?: ProdutoAfiliado; produtos?: ProdutoAfiliado[] } | null> => {
     setSalvando(true);
     setStatusSalvamento('💾 Salvando no banco de dados...');
     try {
-      const url = metodo === 'DELETE' ? `/api/produtos?id=${encodeURIComponent(id || '')}` : '/api/produtos';
+      const url =
+        metodo === 'DELETE'
+          ? id === '__TODOS__'
+            ? '/api/produtos?todos=1'
+            : `/api/produtos?id=${encodeURIComponent(id || '')}`
+          : '/api/produtos';
+
+      const headers: Record<string, string> = {};
+      if (corpo) headers['Content-Type'] = 'application/json';
+      const tokenAtual = adminToken || localStorage.getItem(ADMIN_TOKEN_STORAGE) || '';
+      if (tokenAtual) headers['x-admin-token'] = tokenAtual;
+
       const res = await fetch(url, {
         method: metodo,
-        headers: corpo ? { 'Content-Type': 'application/json' } : undefined,
+        headers,
         body: corpo ? JSON.stringify(corpo) : undefined,
       });
       const data = await res.json().catch(() => ({}));
@@ -213,7 +270,12 @@ export default function VitrineAfiliadosPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ pin: '1234' }),
         });
-        if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok) {
+          if (data.token) {
+            setAdminToken(data.token);
+            localStorage.setItem(ADMIN_TOKEN_STORAGE, data.token);
+          }
           setAdminAutenticado(true);
           setSecaoAtiva('admin');
           return;
@@ -437,6 +499,10 @@ export default function VitrineAfiliadosPage() {
     setNovaOcasiao(item.ocasiao);
     setNovoAmbiente(item.ambiente || 'Sala');
     setNovaLoja(item.loja);
+    setNovoVendidos(item.vendidos || 'Oferta Verificada 🔥');
+    setNovaAvaliacao(item.avaliacao || '4.9');
+    setNovoEmAlta(item.emAlta !== false);
+    setNovoFreteGratis(item.freteGratis !== false);
     setSecaoAtiva('admin');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -448,6 +514,10 @@ export default function VitrineAfiliadosPage() {
     setNovoPrecoAntigo('');
     setNovoLink('');
     setNovaImagem('');
+    setNovoVendidos('Novo na vitrine 🔥');
+    setNovaAvaliacao('4.9');
+    setNovoEmAlta(true);
+    setNovoFreteGratis(true);
   };
 
   // Salvar Novo Produto ou Atualizar Produto Editado
@@ -472,6 +542,16 @@ export default function VitrineAfiliadosPage() {
     const categoriaFinal =
       novoDepartamento === 'looks' ? novoGenero : novaCategoria;
 
+    const linkNormalizado = /^https?:\/\//i.test(novoLink.trim())
+      ? novoLink.trim()
+      : `https://${novoLink.trim()}`;
+
+    const imagemNormalizada = novaImagem.trim()
+      ? /^https?:\/\//i.test(novaImagem.trim())
+        ? novaImagem.trim()
+        : `https://${novaImagem.trim()}`
+      : 'https://images.unsplash.com/photo-1513297887119-d46091b24bfa?auto=format&fit=crop&w=700&q=80';
+
     const itemSalvo: ProdutoAfiliado = {
       id: idEmEdicao || `${novoDepartamento}-${Date.now()}`,
       codigo: novoCodigo.trim().replace(/^#/, '') || '999',
@@ -486,14 +566,12 @@ export default function VitrineAfiliadosPage() {
       ocasiao: novaOcasiao,
       ambiente: novoDepartamento === 'decoracao' ? novoAmbiente : undefined,
       loja: novaLoja,
-      avaliacao: '4.9',
-      vendidos: idEmEdicao ? 'Oferta Verificada 🔥' : 'Novo na vitrine 🔥',
-      emAlta: true,
-      freteGratis: true,
-      imagem:
-        novaImagem.trim() ||
-        'https://images.unsplash.com/photo-1513297887119-d46091b24bfa?auto=format&fit=crop&w=700&q=80',
-      link: novoLink.trim(),
+      avaliacao: novaAvaliacao.trim() || '4.9',
+      vendidos: novoVendidos.trim() || (idEmEdicao ? 'Oferta Verificada 🔥' : 'Novo na vitrine 🔥'),
+      emAlta: novoEmAlta,
+      freteGratis: novoFreteGratis,
+      imagem: imagemNormalizada,
+      link: linkNormalizado,
       criadoEm: new Date().toISOString(),
     };
 
@@ -502,31 +580,34 @@ export default function VitrineAfiliadosPage() {
     if (!resposta?.produto) return;
     const produtoSalvo = resposta.produto;
 
-    setCatalogo((atual) =>
-      idEmEdicao
+    setCatalogo((atual) => {
+      const novaLista = idEmEdicao
         ? atual.map((p) => (p.id === idEmEdicao ? produtoSalvo : p))
-        : [produtoSalvo, ...atual]
-    );
+        : [produtoSalvo, ...atual.filter((p) => p.id !== produtoSalvo.id)];
+      localStorage.setItem(CACHE_CATALOGO, JSON.stringify(novaLista));
+      return novaLista;
+    });
+
     mostrarStatus(
       idEmEdicao
-        ? `✅ Produto #${produtoSalvo.codigo} atualizado no banco!`
-        : `✅ Novo link #${produtoSalvo.codigo} salvo no banco!`
+        ? `✅ Produto #${produtoSalvo.codigo} atualizado no banco para todos!`
+        : `✅ Novo link #${produtoSalvo.codigo} salvo no banco para todos!`
     );
 
     setMensagemSucesso(
       idEmEdicao
-        ? `Link/Produto #${produtoSalvo.codigo} alterado e salvo no banco de dados!`
-        : `Novo Link #${produtoSalvo.codigo} salvo no banco de dados em "${
+        ? `Link/Produto #${produtoSalvo.codigo} alterado e salvo no banco! Todos os visitantes já veem essa alteração.`
+        : `Novo Link #${produtoSalvo.codigo} salvo no banco em "${
             produtoSalvo.departamento === 'looks'
               ? `Moda (${produtoSalvo.genero})`
               : produtoSalvo.departamento === 'decoracao'
               ? `Decoração (${produtoSalvo.categoria})`
               : `Tecnologia (${produtoSalvo.categoria})`
-          }"!`
+          }"! Visível para todos os visitantes.`
     );
 
     cancelarEdicao();
-    setTimeout(() => setMensagemSucesso(''), 5000);
+    setTimeout(() => setMensagemSucesso(''), 5500);
   };
 
   // Excluir Produto (Direto do Card na Página ou da Lista Admin)
@@ -535,14 +616,81 @@ export default function VitrineAfiliadosPage() {
       e.preventDefault();
       e.stopPropagation();
     }
-    if (!window.confirm(`Excluir o produto ${codigo ? `#${codigo}` : ''} da vitrine? Essa ação é permanente.`)) {
+    if (!window.confirm(`Excluir o produto ${codigo ? `#${codigo}` : ''} da vitrine? Essa ação é permanente para todos os visitantes.`)) {
       return;
     }
     const resposta = await enviarAoBanco('DELETE', undefined, id);
     if (!resposta) return;
-    setCatalogo((atual) => atual.filter((item) => item.id !== id));
+    setCatalogo((atual) => {
+      const novaLista = atual.filter((item) => item.id !== id);
+      localStorage.setItem(CACHE_CATALOGO, JSON.stringify(novaLista));
+      return novaLista;
+    });
     if (idEmEdicao === id) cancelarEdicao();
     mostrarStatus(`🗑️ Produto ${codigo ? `#${codigo}` : ''} excluído do banco!`);
+  };
+
+  // Limpar todos os produtos do catálogo
+  const handleLimparTodos = async () => {
+    if (!window.confirm('Tem certeza que deseja excluir TODOS os produtos da vitrine para cadastrar apenas os seus?')) {
+      return;
+    }
+    const resposta = await enviarAoBanco('DELETE', undefined, '__TODOS__');
+    if (!resposta) return;
+    setCatalogo([]);
+    localStorage.setItem(CACHE_CATALOGO, JSON.stringify([]));
+    cancelarEdicao();
+    mostrarStatus('🗑️ Todos os produtos foram removidos do banco!');
+  };
+
+  // Restaurar produtos de exemplo
+  const handleRestaurarPadrao = async () => {
+    if (!window.confirm('Restaurar os 18 produtos iniciais de demonstração na vitrine?')) {
+      return;
+    }
+    const resposta = await enviarAoBanco('PUT', { restaurarPadrao: true });
+    if (!resposta?.produtos) return;
+    setCatalogo(resposta.produtos);
+    localStorage.setItem(CACHE_CATALOGO, JSON.stringify(resposta.produtos));
+    mostrarStatus('✅ Catálogo inicial restaurado no banco!');
+  };
+
+  // Salvar configuração do Supabase direto pelo painel Admin
+  const handleSalvarConfigSupabase = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSalvandoSupabase(true);
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const tokenAtual = adminToken || localStorage.getItem(ADMIN_TOKEN_STORAGE) || '';
+      if (tokenAtual) headers['x-admin-token'] = tokenAtual;
+
+      const res = await fetch('/api/admin', {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({
+          supabaseUrl: inputSupabaseUrl.trim(),
+          supabaseKey: inputSupabaseKey.trim(),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        mostrarStatus(`❌ Supabase: ${data.erro || 'Erro ao conectar'}`);
+        return;
+      }
+      setSupabaseConectado(!!data.supabaseConectado);
+      setInputSupabaseKey('');
+      setMostrarConfigSupabase(false);
+      await sincronizarCatalogoDoServidor(true);
+      mostrarStatus(
+        data.supabaseConectado
+          ? `✅ Supabase conectado e sincronizado (${data.totalSincronizado ?? catalogo.length} produtos)!`
+          : '✅ Usando banco em nuvem integrado padrão.'
+      );
+    } catch {
+      mostrarStatus('❌ Erro de rede ao conectar Supabase.');
+    } finally {
+      setSalvandoSupabase(false);
+    }
   };
 
   // Login do proprietário (senha verificada no servidor)
@@ -557,6 +705,10 @@ export default function VitrineAfiliadosPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
+        if (data.token) {
+          setAdminToken(data.token);
+          localStorage.setItem(ADMIN_TOKEN_STORAGE, data.token);
+        }
         setAdminAutenticado(true);
         setModalPinAberto(false);
         setSecaoAtiva('admin');
@@ -569,13 +721,15 @@ export default function VitrineAfiliadosPage() {
     }
   };
 
-  // Logout do proprietário (remove o cookie de sessão no servidor)
+  // Logout do proprietário (remove o cookie e token de sessão)
   const handleSairAdmin = async () => {
     try {
       await fetch('/api/admin', { method: 'DELETE' });
     } catch {
       // ignora
     }
+    localStorage.removeItem(ADMIN_TOKEN_STORAGE);
+    setAdminToken('');
     setAdminAutenticado(false);
     cancelarEdicao();
     if (secaoAtiva === 'admin') setSecaoAtiva('tudo');
@@ -1194,43 +1348,115 @@ export default function VitrineAfiliadosPage() {
         {secaoAtiva === 'admin' && adminAutenticado && (
           <section className="max-w-5xl mx-auto space-y-8">
             {/* Cabeçalho do Painel Admin */}
-            <div className="bg-slate-900 text-white rounded-xl p-4 sm:p-6 shadow-xs border border-slate-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <div>
-                <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider bg-amber-400/15 text-amber-300 border border-amber-400/30 px-2.5 py-0.5 rounded-md mb-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                  Painel do Proprietário
-                </span>
-                <h1 className="text-lg sm:text-2xl font-bold tracking-tight">
-                  {idEmEdicao
-                    ? `Editando Produto #${novoCodigo}`
-                    : 'Adicionar Novo Link Afiliado'}
-                </h1>
-                <p className="text-xs sm:text-sm text-slate-400 mt-0.5">
-                  Toda alteração feita aqui salva automaticamente na vitrine e separa por categoria.
-                </p>
-              </div>
+            <div className="bg-slate-900 text-white rounded-xl p-4 sm:p-6 shadow-xs border border-slate-800 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap mb-1.5">
+                    <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider bg-amber-400/15 text-amber-300 border border-amber-400/30 px-2.5 py-0.5 rounded-md">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                      Painel do Proprietário
+                    </span>
+                    <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-2.5 py-0.5 rounded-md">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      {supabaseConectado
+                        ? 'Supabase PostgreSQL + Nuvem Ativos'
+                        : 'Banco em Nuvem Ativo (Sincronização Global)'}
+                    </span>
+                  </div>
+                  <h1 className="text-lg sm:text-2xl font-bold tracking-tight">
+                    {idEmEdicao
+                      ? `Editando Produto #${novoCodigo}`
+                      : 'Adicionar Novo Link Afiliado'}
+                  </h1>
+                  <p className="text-xs sm:text-sm text-slate-400 mt-0.5">
+                    Tudo que você adicionar, editar ou excluir aqui fica salvo no banco de dados e aparece para todas as pessoas que entrarem no site.
+                  </p>
+                </div>
 
-              <div className="flex items-center gap-2 self-start sm:self-center">
-                {idEmEdicao && (
+                <div className="flex items-center gap-2 flex-wrap self-start sm:self-center">
                   <button
                     type="button"
-                    onClick={cancelarEdicao}
-                    className="px-3.5 py-2 rounded-lg bg-amber-400/15 hover:bg-amber-400/25 text-amber-300 border border-amber-400/30 text-xs font-semibold transition-all duration-150 active:scale-[0.98] cursor-pointer"
+                    onClick={() => setMostrarConfigSupabase((v) => !v)}
+                    className="px-3 py-2 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-xs font-semibold transition-all duration-150 cursor-pointer"
                   >
-                    Cancelar edição
+                    {mostrarConfigSupabase ? 'Fechar config. Supabase' : '🗄️ Configurar Supabase'}
                   </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setSecaoAtiva('tudo')}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-white border border-white/15 text-xs font-medium transition-all duration-150 active:scale-[0.98] cursor-pointer"
-                >
-                  <svg className="w-3.5 h-3.5 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                  </svg>
-                  <span>Voltar para a vitrine</span>
-                </button>
+                  {idEmEdicao && (
+                    <button
+                      type="button"
+                      onClick={cancelarEdicao}
+                      className="px-3.5 py-2 rounded-lg bg-amber-400/15 hover:bg-amber-400/25 text-amber-300 border border-amber-400/30 text-xs font-semibold transition-all duration-150 active:scale-[0.98] cursor-pointer"
+                    >
+                      Cancelar edição
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setSecaoAtiva('tudo')}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-white border border-white/15 text-xs font-medium transition-all duration-150 active:scale-[0.98] cursor-pointer"
+                  >
+                    <svg className="w-3.5 h-3.5 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                    </svg>
+                    <span>Voltar para a vitrine</span>
+                  </button>
+                </div>
               </div>
+
+              {/* Painel Opcional de Conexão Direta com seu Projeto Supabase */}
+              {mostrarConfigSupabase && (
+                <form
+                  onSubmit={handleSalvarConfigSupabase}
+                  className="bg-slate-800/90 border border-slate-700 rounded-xl p-4 space-y-3"
+                >
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs sm:text-sm font-bold text-emerald-300">
+                      🗄️ Conectar seu Projeto Supabase (PostgreSQL)
+                    </h3>
+                    <span className="text-[11px] text-slate-400">
+                      O banco em nuvem integrado já está salvando tudo automaticamente! Use abaixo se quiser espelhar também no seu próprio projeto Supabase.
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                        Project URL (SUPABASE_URL)
+                      </label>
+                      <input
+                        type="text"
+                        value={inputSupabaseUrl}
+                        onChange={(e) => setInputSupabaseUrl(e.target.value)}
+                        placeholder="https://seu-projeto.supabase.co"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-400"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                        API Key (service_role ou anon)
+                      </label>
+                      <input
+                        type="password"
+                        value={inputSupabaseKey}
+                        onChange={(e) => setInputSupabaseKey(e.target.value)}
+                        placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-400"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 pt-1">
+                    <p className="text-[11px] text-slate-400">
+                      Dica: Execute o arquivo <code className="text-amber-300">supabase/schema.sql</code> no SQL Editor do Supabase antes de conectar.
+                    </p>
+                    <button
+                      type="submit"
+                      disabled={salvandoSupabase}
+                      className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-4 py-2 rounded-lg cursor-pointer shrink-0"
+                    >
+                      {salvandoSupabase ? 'Conectando...' : 'Salvar e Sincronizar Supabase'}
+                    </button>
+                  </div>
+                </form>
+              )}
             </div>
 
             {mensagemSucesso && (
@@ -1276,7 +1502,7 @@ export default function VitrineAfiliadosPage() {
                     Seu Link de Afiliado (Shopee / Mercado Livre) *
                   </label>
                   <input
-                    type="url"
+                    type="text"
                     required
                     value={novoLink}
                     onChange={(e) => handleLinkChange(e.target.value)}
@@ -1344,19 +1570,33 @@ export default function VitrineAfiliadosPage() {
                   </div>
                 </div>
 
-                {/* Link da Foto */}
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Link da Imagem do Produto (URL) *
-                  </label>
-                  <input
-                    type="url"
-                    required
-                    value={novaImagem}
-                    onChange={(e) => setNovaImagem(e.target.value)}
-                    placeholder="Cole a URL da foto do produto (https://...)"
-                    className="w-full border border-slate-300 rounded-lg px-3.5 py-2 text-sm focus:outline-none focus:border-slate-900 transition-colors"
-                  />
+                {/* Link da Foto + Detalhes Extras */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Link da Imagem do Produto (URL)
+                    </label>
+                    <input
+                      type="text"
+                      value={novaImagem}
+                      onChange={(e) => setNovaImagem(e.target.value)}
+                      placeholder="Cole a URL da foto do produto (https://...)"
+                      className="w-full border border-slate-300 rounded-lg px-3.5 py-2 text-sm focus:outline-none focus:border-slate-900 transition-colors"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Destaque de Vendas
+                    </label>
+                    <input
+                      type="text"
+                      value={novoVendidos}
+                      onChange={(e) => setNovoVendidos(e.target.value)}
+                      placeholder="Ex: +1,2 mil vendidos"
+                      className="w-full border border-slate-300 rounded-lg px-3.5 py-2 text-sm focus:outline-none focus:border-slate-900 transition-colors"
+                    />
+                  </div>
                 </div>
 
                 {/* Classificação Automática */}
@@ -1603,7 +1843,7 @@ export default function VitrineAfiliadosPage() {
                   </p>
                 </div>
 
-                <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide">
+                <div className="flex items-center gap-1.5 flex-wrap">
                   {(['todos', 'looks', 'decoracao', 'tecnologia'] as const).map((dep) => (
                     <button
                       key={dep}
@@ -1624,6 +1864,26 @@ export default function VitrineAfiliadosPage() {
                         : 'Tecnologia'}
                     </button>
                   ))}
+
+                  <button
+                    type="button"
+                    onClick={handleRestaurarPadrao}
+                    className="px-2.5 py-1.5 rounded-lg text-xs font-semibold border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 cursor-pointer"
+                    title="Restaurar os 18 produtos iniciais de demonstração"
+                  >
+                    Restaurar exemplos
+                  </button>
+
+                  {catalogo.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleLimparTodos}
+                      className="px-2.5 py-1.5 rounded-lg text-xs font-semibold border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100 cursor-pointer"
+                      title="Apagar todos os produtos da vitrine de uma vez"
+                    >
+                      Limpar tudo
+                    </button>
+                  )}
                 </div>
               </div>
 
