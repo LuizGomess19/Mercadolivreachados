@@ -29,12 +29,29 @@ create table if not exists public.produtos (
 create index if not exists produtos_criado_em_idx on public.produtos (criado_em desc);
 create index if not exists produtos_departamento_idx on public.produtos (departamento);
 
--- Segurança: RLS ligado e SEM políticas públicas.
--- Ninguém acessa a tabela direto pelo navegador; somente o servidor do site
--- (via SUPABASE_SERVICE_ROLE_KEY) consegue ler e gravar.
+-- Segurança: RLS ligado na tabela public.produtos
+-- Leitura pública do catálogo e escrita autorizada pelo servidor da aplicação
+grant usage on schema public to anon, authenticated, service_role;
+grant select, insert, update, delete on table public.produtos to anon, authenticated, service_role;
+
 alter table public.produtos enable row level security;
-revoke all on public.produtos from anon, authenticated;
-grant select, insert, update, delete on public.produtos to service_role;
+
+create policy "Leitura publica de produtos"
+  on public.produtos
+  for select
+  to anon, authenticated, service_role
+  using (true);
+
+create policy "Escrita autorizada pelo servidor"
+  on public.produtos
+  for all
+  to anon, authenticated, service_role
+  using (
+    coalesce((current_setting('request.headers', true)::json ->> 'x-ml-server-key'), '') = 'ml-achados-srv-poqeeewzhzejpmuexomr'
+  )
+  with check (
+    coalesce((current_setting('request.headers', true)::json ->> 'x-ml-server-key'), '') = 'ml-achados-srv-poqeeewzhzejpmuexomr'
+  );
 
 -- Produtos iniciais da vitrine (ignorados se já existirem)
 insert into public.produtos (
