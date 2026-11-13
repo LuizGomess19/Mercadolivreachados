@@ -166,6 +166,11 @@ export function bancoConfigurado(): boolean {
   return true; // Google Cloud Firestore já está configurado e ativo por padrão
 }
 
+/** Indica qual banco está sendo usado como principal neste ambiente. */
+export function bancoAtivo(): 'supabase' | 'firestore' {
+  return getSupabase() ? 'supabase' : 'firestore';
+}
+
 // ---------------------------------------------------------------------------
 // 3. Espelhamento Local (data/catalogo.json + memória)
 // ---------------------------------------------------------------------------

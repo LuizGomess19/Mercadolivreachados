@@ -33,6 +33,8 @@ create index if not exists produtos_departamento_idx on public.produtos (departa
 -- Ninguém acessa a tabela direto pelo navegador; somente o servidor do site
 -- (via SUPABASE_SERVICE_ROLE_KEY) consegue ler e gravar.
 alter table public.produtos enable row level security;
+revoke all on public.produtos from anon, authenticated;
+grant select, insert, update, delete on public.produtos to service_role;
 
 -- Produtos iniciais da vitrine (ignorados se já existirem)
 insert into public.produtos (

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { isAdmin } from '@/lib/auth';
 import {
   atualizarProduto,
+  bancoAtivo,
   bancoConfigurado,
   criarProduto,
   excluirProduto,
@@ -28,7 +29,7 @@ function erroServidor(error: unknown) {
 export async function GET() {
   try {
     const produtos = await listarProdutos();
-    return NextResponse.json({ produtos, persistente: bancoConfigurado() });
+    return NextResponse.json({ produtos, persistente: bancoConfigurado(), banco: bancoAtivo() });
   } catch (error) {
     return erroServidor(error);
   }
