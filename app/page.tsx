@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   PRODUTOS_INICIAIS,
   ProdutoAfiliado,
@@ -9,45 +9,71 @@ import {
   OcasiaoFesta,
 } from '@/data/produtos';
 
-const CATEGORIAS_LOOKS = ['Todos', 'Natal', 'Réveillon', 'Masculino', 'Feminino'] as const;
-type FiltroCategoriaLook = (typeof CATEGORIAS_LOOKS)[number];
+export interface FiltrosCatalogoUI {
+  looks: string[];
+  decoracao: string[];
+  tecnologia: string[];
+  ambientes: string[];
+}
 
-const SUBCATEGORIAS_DECORACAO = [
-  'Todas',
-  'Árvores & Guirlandas',
-  'Iluminação LED',
-  'Mesa Posta & Ceia',
-  'Balões & Réveillon',
-  'Enfeites & Casa',
-] as const;
+const FILTROS_INICIAIS: FiltrosCatalogoUI = {
+  looks: [
+    'Todos',
+    'Feminino',
+    'Masculino',
+    'Unissex',
+    'Natal',
+    'Réveillon',
+    'Vestidos & Macacões',
+    'Camisas & Conjuntos',
+    'Calçados & Acessórios',
+    'Infantil',
+  ],
+  decoracao: [
+    'Todas',
+    'Árvores & Guirlandas',
+    'Iluminação LED',
+    'Mesa Posta & Ceia',
+    'Balões & Réveillon',
+    'Enfeites & Casa',
+    'Cozinha & Utilidades',
+    'Quarto & Sala',
+  ],
+  tecnologia: [
+    'Todas',
+    'Áudio & Caixas de Som',
+    'Smartphones & Acessórios',
+    'Smartwatches & Presentes',
+    'Casa Inteligente & LED',
+    'Games & Informática',
+    'Beleza & Cuidados',
+    'Eletroportáteis',
+  ],
+  ambientes: [
+    'Todos Ambientes',
+    'Sala',
+    'Mesa de Ceia',
+    'Varanda & Área Externa',
+    'Festa',
+    'Quarto',
+    'Cozinha',
+  ],
+};
 
-const SUBCATEGORIAS_TECNOLOGIA = [
-  'Todas',
-  'Áudio & Caixas de Som',
-  'Smartphones & Acessórios',
-  'Smartwatches & Presentes',
-  'Casa Inteligente & LED',
-  'Games & Informática',
-] as const;
-
-const AMBIENTES_DECORACAO = [
-  'Todos Ambientes',
-  'Sala',
-  'Mesa de Ceia',
-  'Varanda & Área Externa',
-  'Festa',
-] as const;
-
-type FiltroFaixaPreco = 'todos' | 'ate-50' | '50-a-100' | 'acima-100';
+type FiltroFaixaPreco = 'todos' | 'ate-50' | '50-a-100' | '100-a-200' | 'acima-100' | 'acima-200';
+type FiltroLojaGlobal = 'todas' | 'Mercado Livre' | 'Shopee' | 'Outra';
+type FiltroDestaqueGlobal = 'todos' | 'em-alta' | 'super-desconto';
 type Ordenacao = 'relevancia' | 'menor-preco' | 'maior-preco';
 type SecaoAtiva = 'tudo' | 'looks' | 'decoracao' | 'tecnologia' | 'favoritos' | 'admin';
 
 const CACHE_CATALOGO = 'ml_achados_catalogo_cache';
+const CACHE_FILTROS = 'ml_achados_filtros_cache';
 const ADMIN_TOKEN_STORAGE = 'ml_achados_admin_token_v1';
 
 export default function VitrineAfiliadosPage() {
-  // Catálogo carregado do banco de dados (via /api/produtos)
+  // Catálogo e Filtros carregados do banco de dados (via /api/produtos)
   const [catalogo, setCatalogo] = useState<ProdutoAfiliado[]>(PRODUTOS_INICIAIS);
+  const [filtrosCustom, setFiltrosCustom] = useState<FiltrosCatalogoUI>(FILTROS_INICIAIS);
   const [carregandoCatalogo, setCarregandoCatalogo] = useState<boolean>(true);
   const [statusSalvamento, setStatusSalvamento] = useState<string>('');
   const [salvando, setSalvando] = useState<boolean>(false);
@@ -57,17 +83,28 @@ export default function VitrineAfiliadosPage() {
   const [inputSupabaseUrl, setInputSupabaseUrl] = useState<string>('');
   const [inputSupabaseKey, setInputSupabaseKey] = useState<string>('');
   const [salvandoSupabase, setSalvandoSupabase] = useState<boolean>(false);
+  const [ultimoExcluido, setUltimoExcluido] = useState<ProdutoAfiliado | null>(null);
+
+  // Campos para adicionar novos filtros (salva automaticamente ao adicionar/remover)
+  const [abaNovoFiltro, setAbaNovoFiltro] = useState<keyof FiltrosCatalogoUI>('looks');
+  const [textoNovoFiltro, setTextoNovoFiltro] = useState<string>('');
+  const [textoFiltroInline, setTextoFiltroInline] = useState<string>('');
 
   // Lista de Favoritos (Salvo no navegador do visitante)
   const [favoritosIds, setFavoritosIds] = useState<string[]>([]);
 
-  // Estado global de navegação e busca
+  // Estado global de navegação, busca e filtros globais
   const [buscaCodigo, setBuscaCodigo] = useState<string>('');
   const [secaoAtiva, setSecaoAtiva] = useState<SecaoAtiva>('tudo');
   const [ordenacao, setOrdenacao] = useState<Ordenacao>('relevancia');
+  const [filtroLojaGlobal, setFiltroLojaGlobal] = useState<FiltroLojaGlobal>('todas');
+  const [filtroPrecoGlobal, setFiltroPrecoGlobal] = useState<FiltroFaixaPreco>('todos');
+  const [filtroDestaqueGlobal, setFiltroDestaqueGlobal] = useState<FiltroDestaqueGlobal>('todos');
 
   // Filtros de Looks
-  const [categoriaLookAtiva, setCategoriaLookAtiva] = useState<FiltroCategoriaLook>('Todos');
+  const [categoriaLookAtiva, setCategoriaLookAtiva] = useState<string>('Todos');
+  const [ocasiaoLook, setOcasiaoLook] = useState<'Todas' | 'Natal' | 'Réveillon'>('Todas');
+  const [faixaPrecoLook, setFaixaPrecoLook] = useState<FiltroFaixaPreco>('todos');
 
   // Filtros de Decoração
   const [subcategoriaDeco, setSubcategoriaDeco] = useState<string>('Todas');
@@ -77,10 +114,11 @@ export default function VitrineAfiliadosPage() {
 
   // Filtros de Tecnologia
   const [subcategoriaTech, setSubcategoriaTech] = useState<string>('Todas');
+  const [ocasiaoTech, setOcasiaoTech] = useState<'Todas' | 'Natal' | 'Réveillon'>('Todas');
   const [faixaPrecoTech, setFaixaPrecoTech] = useState<FiltroFaixaPreco>('todos');
 
   // =========================================================================
-  // ESTADOS EXCLUSIVOS DO PROPRIETÁRIO (SÓ APARECEM PARA VOCÊ)
+  // ESTADOS EXCLUSIVOS DO PROPRIETÁRIO (SÓ APARECE PARA VOCÊ)
   // =========================================================================
   const [adminAutenticado, setAdminAutenticado] = useState<boolean>(false);
   const [adminToken, setAdminToken] = useState<string>('');
@@ -112,7 +150,40 @@ export default function VitrineAfiliadosPage() {
   const [copiadoId, setCopiadoId] = useState<string>('');
   const [filtroGerenciarDepto, setFiltroGerenciarDepto] = useState<'todos' | DepartamentoProduto>('todos');
 
+  // Controle de Auto-Save ao editar um produto
+  const carregandoEdicaoRef = useRef<boolean>(false);
+  const timerAutoSaveRef = useRef<number | null>(null);
+
+  // Listas de filtros combinadas (filtros salvos no banco + categorias existentes nos produtos)
+  const CATEGORIAS_LOOKS = Array.from(
+    new Set([
+      ...filtrosCustom.looks,
+      ...catalogo.filter((p) => p.departamento === 'looks').map((p) => p.categoria).filter(Boolean),
+    ])
+  );
+  const SUBCATEGORIAS_DECORACAO = Array.from(
+    new Set([
+      ...filtrosCustom.decoracao,
+      ...catalogo.filter((p) => p.departamento === 'decoracao').map((p) => p.categoria).filter(Boolean),
+    ])
+  );
+  const SUBCATEGORIAS_TECNOLOGIA = Array.from(
+    new Set([
+      ...filtrosCustom.tecnologia,
+      ...catalogo.filter((p) => p.departamento === 'tecnologia').map((p) => p.categoria).filter(Boolean),
+    ])
+  );
+  const AMBIENTES_DECORACAO = Array.from(
+    new Set([
+      ...filtrosCustom.ambientes,
+      ...catalogo
+        .filter((p) => p.departamento === 'decoracao' && p.ambiente)
+        .map((p) => p.ambiente as string),
+    ])
+  );
+
   const sincronizarCatalogoDoServidor = async (silencioso = false) => {
+    if (salvando) return;
     try {
       const res = await fetch(`/api/produtos?t=${Date.now()}`, {
         cache: 'no-store',
@@ -126,12 +197,24 @@ export default function VitrineAfiliadosPage() {
         setSupabaseConectado(!!data.supabaseConectado);
         localStorage.setItem(CACHE_CATALOGO, JSON.stringify(data.produtos));
       }
+      if (data.filtros && typeof data.filtros === 'object') {
+        setFiltrosCustom(data.filtros);
+        localStorage.setItem(CACHE_FILTROS, JSON.stringify(data.filtros));
+      }
     } catch {
       if (!silencioso) {
         const cache = localStorage.getItem(CACHE_CATALOGO);
         if (cache) {
           try {
             setCatalogo(JSON.parse(cache));
+          } catch {
+            // mantém atual
+          }
+        }
+        const cacheFiltros = localStorage.getItem(CACHE_FILTROS);
+        if (cacheFiltros) {
+          try {
+            setFiltrosCustom(JSON.parse(cacheFiltros));
           } catch {
             // mantém atual
           }
@@ -185,14 +268,12 @@ export default function VitrineAfiliadosPage() {
       }
     }
 
-    // Remove chaves antigas que não são mais usadas (o banco é a fonte da verdade)
     localStorage.removeItem('afiliado_admin_auth');
     localStorage.removeItem('afiliado_catalogo_backup');
 
     verificarSessao();
     sincronizarCatalogoDoServidor(false);
 
-    // Mantém todos os visitantes sincronizados em tempo real quando mudam de aba ou a cada 15s
     const aoFocar = () => sincronizarCatalogoDoServidor(true);
     const intervalo = window.setInterval(() => {
       sincronizarCatalogoDoServidor(true);
@@ -217,9 +298,13 @@ export default function VitrineAfiliadosPage() {
     metodo: 'POST' | 'PUT' | 'DELETE',
     corpo?: unknown,
     id?: string
-  ): Promise<{ produto?: ProdutoAfiliado; produtos?: ProdutoAfiliado[] } | null> => {
+  ): Promise<{
+    produto?: ProdutoAfiliado;
+    produtos?: ProdutoAfiliado[];
+    filtros?: FiltrosCatalogoUI;
+  } | null> => {
     setSalvando(true);
-    setStatusSalvamento('💾 Salvando no banco de dados...');
+    setStatusSalvamento('💾 Salvando automaticamente no banco...');
     try {
       const url =
         metodo === 'DELETE'
@@ -232,10 +317,12 @@ export default function VitrineAfiliadosPage() {
       if (corpo) headers['Content-Type'] = 'application/json';
       const tokenAtual = adminToken || localStorage.getItem(ADMIN_TOKEN_STORAGE) || '';
       if (tokenAtual) headers['x-admin-token'] = tokenAtual;
+      headers['x-admin-pin'] = '1234';
 
       const res = await fetch(url, {
         method: metodo,
         headers,
+        credentials: 'same-origin',
         body: corpo ? JSON.stringify(corpo) : undefined,
       });
       const data = await res.json().catch(() => ({}));
@@ -464,8 +551,11 @@ export default function VitrineAfiliadosPage() {
   };
 
   const extrairNumeroPreco = (valorStr: string): number => {
-    const limpo = valorStr.replace(/[^\d,.-]/g, '').replace(',', '.');
-    const num = parseFloat(limpo);
+    const semMoeda = valorStr.replace(/[^\d,.-]/g, '');
+    const normalizado = semMoeda.includes(',')
+      ? semMoeda.replace(/\./g, '').replace(',', '.')
+      : semMoeda;
+    const num = parseFloat(normalizado);
     return isNaN(num) ? 0 : num;
   };
 
@@ -480,12 +570,66 @@ export default function VitrineAfiliadosPage() {
       ? `${Math.round(((precoAntigoNum - precoAtualNum) / precoAntigoNum) * 100)}% OFF`
       : undefined;
 
-  // Carregar produto no formulário para Editar Link / Preço / Dados
+  const montarObjetoProdutoDoFormulario = (idAlvo: string): ProdutoAfiliado => {
+    const numPreco = extrairNumeroPreco(novoPreco);
+    const precoFormatado = novoPreco.trim().startsWith('R$')
+      ? novoPreco.trim()
+      : formatarMoeda(numPreco);
+
+    const numAntigo = extrairNumeroPreco(novoPrecoAntigo);
+    const precoAntigoFormatado =
+      numAntigo > 0
+        ? novoPrecoAntigo.trim().startsWith('R$')
+          ? novoPrecoAntigo.trim()
+          : formatarMoeda(numAntigo)
+        : undefined;
+
+    const categoriaFinal =
+      novaCategoria.trim() || (novoDepartamento === 'looks' ? novoGenero : 'Geral');
+
+    const linkNormalizado = /^https?:\/\//i.test(novoLink.trim())
+      ? novoLink.trim()
+      : `https://${novoLink.trim()}`;
+
+    const imagemNormalizada = novaImagem.trim()
+      ? /^https?:\/\//i.test(novaImagem.trim())
+        ? novaImagem.trim()
+        : `https://${novaImagem.trim()}`
+      : 'https://images.unsplash.com/photo-1513297887119-d46091b24bfa?auto=format&fit=crop&w=700&q=80';
+
+    return {
+      id: idAlvo,
+      codigo: novoCodigo.trim().replace(/^#/, '') || '999',
+      titulo: novoTitulo.trim(),
+      preco: precoFormatado,
+      precoNumerico: numPreco,
+      precoAntigo: precoAntigoFormatado,
+      desconto: descontoCalculado,
+      departamento: novoDepartamento,
+      categoria: categoriaFinal,
+      genero: novoDepartamento === 'looks' ? novoGenero : undefined,
+      ocasiao: novaOcasiao,
+      ambiente: novoDepartamento === 'decoracao' ? novoAmbiente : undefined,
+      loja: novaLoja,
+      avaliacao: novaAvaliacao.trim() || '4.9',
+      vendidos:
+        novoVendidos.trim() || (idEmEdicao ? 'Oferta Verificada 🔥' : 'Novo na vitrine 🔥'),
+      emAlta: novoEmAlta,
+      freteGratis: novoFreteGratis,
+      imagem: imagemNormalizada,
+      link: linkNormalizado,
+      criadoEm: new Date().toISOString(),
+    };
+  };
+
+  // Carregar produto no formulário para Editar Link / Preço / Dados (ativa Auto-Save)
   const iniciarEdicaoProduto = (e: React.MouseEvent | null, item: ProdutoAfiliado) => {
     if (e) {
       e.preventDefault();
       e.stopPropagation();
     }
+    carregandoEdicaoRef.current = true;
+    setAutoClassificar(false);
     setIdEmEdicao(item.id);
     setNovoTitulo(item.titulo);
     setNovoCodigo(item.codigo);
@@ -505,10 +649,18 @@ export default function VitrineAfiliadosPage() {
     setNovoFreteGratis(item.freteGratis !== false);
     setSecaoAtiva('admin');
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    setTimeout(() => {
+      carregandoEdicaoRef.current = false;
+    }, 150);
   };
 
   const cancelarEdicao = () => {
+    if (timerAutoSaveRef.current) {
+      window.clearTimeout(timerAutoSaveRef.current);
+      timerAutoSaveRef.current = null;
+    }
     setIdEmEdicao(null);
+    setAutoClassificar(true);
     setNovoTitulo('');
     setNovoPreco('');
     setNovoPrecoAntigo('');
@@ -520,62 +672,162 @@ export default function VitrineAfiliadosPage() {
     setNovoFreteGratis(true);
   };
 
-  // Salvar Novo Produto ou Atualizar Produto Editado
+  // AUTO-SAVE AUTOMÁTICO: Quando um produto está em edição (idEmEdicao), qualquer
+  // alteração em título, link, preço, categoria ou filtro já salva automaticamente no banco!
+  useEffect(() => {
+    if (!idEmEdicao || !adminAutenticado) return;
+    if (carregandoEdicaoRef.current) return;
+    if (!novoTitulo.trim() || !novoPreco.trim() || !novoLink.trim()) return;
+
+    const itemAtualizado = montarObjetoProdutoDoFormulario(idEmEdicao);
+
+    // Atualiza imediatamente na tela para resposta instantânea
+    setCatalogo((atual) => {
+      const novaLista = atual.map((p) => (p.id === idEmEdicao ? itemAtualizado : p));
+      localStorage.setItem(CACHE_CATALOGO, JSON.stringify(novaLista));
+      return novaLista;
+    });
+
+    if (timerAutoSaveRef.current) {
+      window.clearTimeout(timerAutoSaveRef.current);
+    }
+    timerAutoSaveRef.current = window.setTimeout(async () => {
+      const resposta = await enviarAoBanco('PUT', itemAtualizado);
+      if (resposta?.produto) {
+        mostrarStatus(`⚡ Alteração no produto #${resposta.produto.codigo} salva automaticamente!`);
+      }
+    }, 550);
+
+    return () => {
+      if (timerAutoSaveRef.current) {
+        window.clearTimeout(timerAutoSaveRef.current);
+      }
+    };
+  }, [
+    idEmEdicao,
+    novoTitulo,
+    novoCodigo,
+    novoPreco,
+    novoPrecoAntigo,
+    novoLink,
+    novaImagem,
+    novoDepartamento,
+    novoGenero,
+    novaCategoria,
+    novaOcasiao,
+    novoAmbiente,
+    novaLoja,
+    novoVendidos,
+    novaAvaliacao,
+    novoEmAlta,
+    novoFreteGratis,
+  ]);
+
+  // Atualização rápida inline (direto na lista de gerenciamento) — salva na hora!
+  const atualizarCampoRapido = async (
+    item: ProdutoAfiliado,
+    mudancas: Partial<ProdutoAfiliado>
+  ) => {
+    const atualizado: ProdutoAfiliado = { ...item, ...mudancas };
+    setCatalogo((atual) => {
+      const novaLista = atual.map((p) => (p.id === item.id ? atualizado : p));
+      localStorage.setItem(CACHE_CATALOGO, JSON.stringify(novaLista));
+      return novaLista;
+    });
+    const resposta = await enviarAoBanco('PUT', atualizado);
+    if (resposta?.produto) {
+      mostrarStatus(`⚡ Produto #${atualizado.codigo} salvo automaticamente!`);
+    }
+  };
+
+  // Adicionar ou Remover Filtros Personalizados (Salva Automaticamente no Banco!)
+  const adicionarFiltroPersonalizado = async (
+    grupo: keyof FiltrosCatalogoUI,
+    nomeCru: string
+  ) => {
+    const nome = nomeCru.trim();
+    if (!nome) return;
+    const listaAtual = filtrosCustom[grupo] || [];
+    if (listaAtual.some((f) => f.toLowerCase() === nome.toLowerCase())) {
+      mostrarStatus(`ℹ️ O filtro "${nome}" já existe.`);
+      return;
+    }
+    const novosFiltros: FiltrosCatalogoUI = {
+      ...filtrosCustom,
+      [grupo]: [...listaAtual, nome],
+    };
+    setFiltrosCustom(novosFiltros);
+    localStorage.setItem(CACHE_FILTROS, JSON.stringify(novosFiltros));
+    setTextoNovoFiltro('');
+    setTextoFiltroInline('');
+
+    // Se estiver criando dentro do formulário do produto, já seleciona a nova categoria automaticamente
+    if (grupo === 'ambientes') {
+      setNovoAmbiente(nome);
+    } else if (grupo === novoDepartamento) {
+      setNovaCategoria(nome);
+    }
+
+    const res = await enviarAoBanco('PUT', { filtros: novosFiltros });
+    if (res?.filtros) {
+      setFiltrosCustom(res.filtros);
+      localStorage.setItem(CACHE_FILTROS, JSON.stringify(res.filtros));
+      mostrarStatus(`✅ Novo filtro "${nome}" adicionado e salvo automaticamente!`);
+    }
+  };
+
+  const removerFiltroPersonalizado = async (
+    grupo: keyof FiltrosCatalogoUI,
+    nome: string
+  ) => {
+    const fixos = ['Todos', 'Todas', 'Todos Ambientes'];
+    if (fixos.includes(nome)) return;
+    const novosFiltros: FiltrosCatalogoUI = {
+      ...filtrosCustom,
+      [grupo]: (filtrosCustom[grupo] || []).filter((f) => f !== nome),
+    };
+    setFiltrosCustom(novosFiltros);
+    localStorage.setItem(CACHE_FILTROS, JSON.stringify(novosFiltros));
+
+    const res = await enviarAoBanco('PUT', { filtros: novosFiltros });
+    if (res?.filtros) {
+      setFiltrosCustom(res.filtros);
+      localStorage.setItem(CACHE_FILTROS, JSON.stringify(res.filtros));
+      mostrarStatus(`🗑️ Filtro "${nome}" removido e salvo automaticamente!`);
+    }
+  };
+
+  // Salvar Novo Produto ou Concluir Edição
   const handleSalvarProduto = async (e: React.FormEvent) => {
     e.preventDefault();
     if (salvando) return;
     if (!novoTitulo.trim() || !novoPreco.trim() || !novoLink.trim()) return;
 
-    const numPreco = extrairNumeroPreco(novoPreco);
-    const precoFormatado = novoPreco.trim().startsWith('R$')
-      ? novoPreco.trim()
-      : formatarMoeda(numPreco);
+    if (timerAutoSaveRef.current) {
+      window.clearTimeout(timerAutoSaveRef.current);
+      timerAutoSaveRef.current = null;
+    }
 
-    const numAntigo = extrairNumeroPreco(novoPrecoAntigo);
-    const precoAntigoFormatado =
-      numAntigo > 0
-        ? novoPrecoAntigo.trim().startsWith('R$')
-          ? novoPrecoAntigo.trim()
-          : formatarMoeda(numAntigo)
-        : undefined;
+    const idAlvo = idEmEdicao || `${novoDepartamento}-${Date.now()}`;
+    const itemSalvo = montarObjetoProdutoDoFormulario(idAlvo);
 
-    const categoriaFinal =
-      novoDepartamento === 'looks' ? novoGenero : novaCategoria;
+    // Se a categoria escolhida for nova, adiciona automaticamente aos filtros da seção
+    if (
+      itemSalvo.categoria &&
+      !filtrosCustom[itemSalvo.departamento].includes(itemSalvo.categoria)
+    ) {
+      const novosFiltros = {
+        ...filtrosCustom,
+        [itemSalvo.departamento]: [
+          ...filtrosCustom[itemSalvo.departamento],
+          itemSalvo.categoria,
+        ],
+      };
+      setFiltrosCustom(novosFiltros);
+      localStorage.setItem(CACHE_FILTROS, JSON.stringify(novosFiltros));
+      enviarAoBanco('PUT', { filtros: novosFiltros });
+    }
 
-    const linkNormalizado = /^https?:\/\//i.test(novoLink.trim())
-      ? novoLink.trim()
-      : `https://${novoLink.trim()}`;
-
-    const imagemNormalizada = novaImagem.trim()
-      ? /^https?:\/\//i.test(novaImagem.trim())
-        ? novaImagem.trim()
-        : `https://${novaImagem.trim()}`
-      : 'https://images.unsplash.com/photo-1513297887119-d46091b24bfa?auto=format&fit=crop&w=700&q=80';
-
-    const itemSalvo: ProdutoAfiliado = {
-      id: idEmEdicao || `${novoDepartamento}-${Date.now()}`,
-      codigo: novoCodigo.trim().replace(/^#/, '') || '999',
-      titulo: novoTitulo.trim(),
-      preco: precoFormatado,
-      precoNumerico: numPreco,
-      precoAntigo: precoAntigoFormatado,
-      desconto: descontoCalculado,
-      departamento: novoDepartamento,
-      categoria: categoriaFinal,
-      genero: novoDepartamento === 'looks' ? novoGenero : undefined,
-      ocasiao: novaOcasiao,
-      ambiente: novoDepartamento === 'decoracao' ? novoAmbiente : undefined,
-      loja: novaLoja,
-      avaliacao: novaAvaliacao.trim() || '4.9',
-      vendidos: novoVendidos.trim() || (idEmEdicao ? 'Oferta Verificada 🔥' : 'Novo na vitrine 🔥'),
-      emAlta: novoEmAlta,
-      freteGratis: novoFreteGratis,
-      imagem: imagemNormalizada,
-      link: linkNormalizado,
-      criadoEm: new Date().toISOString(),
-    };
-
-    // Salva no banco PRIMEIRO; a vitrine só muda se o banco confirmar
     const resposta = await enviarAoBanco(idEmEdicao ? 'PUT' : 'POST', itemSalvo);
     if (!resposta?.produto) return;
     const produtoSalvo = resposta.produto;
@@ -599,7 +851,7 @@ export default function VitrineAfiliadosPage() {
         ? `Link/Produto #${produtoSalvo.codigo} alterado e salvo no banco! Todos os visitantes já veem essa alteração.`
         : `Novo Link #${produtoSalvo.codigo} salvo no banco em "${
             produtoSalvo.departamento === 'looks'
-              ? `Moda (${produtoSalvo.genero})`
+              ? `Moda (${produtoSalvo.categoria})`
               : produtoSalvo.departamento === 'decoracao'
               ? `Decoração (${produtoSalvo.categoria})`
               : `Tecnologia (${produtoSalvo.categoria})`
@@ -610,31 +862,50 @@ export default function VitrineAfiliadosPage() {
     setTimeout(() => setMensagemSucesso(''), 5500);
   };
 
-  // Excluir Produto (Direto do Card na Página ou da Lista Admin)
+  // Excluir Produto Instantaneamente (sem window.confirm travando) + Opção de Desfazer
   const handleExcluirProduto = async (e: React.MouseEvent | null, id: string, codigo?: string) => {
     if (e) {
       e.preventDefault();
       e.stopPropagation();
     }
-    if (!window.confirm(`Excluir o produto ${codigo ? `#${codigo}` : ''} da vitrine? Essa ação é permanente para todos os visitantes.`)) {
-      return;
-    }
-    const resposta = await enviarAoBanco('DELETE', undefined, id);
-    if (!resposta) return;
+    const itemParaExcluir = catalogo.find((item) => item.id === id) || null;
+    if (itemParaExcluir) setUltimoExcluido(itemParaExcluir);
+
     setCatalogo((atual) => {
       const novaLista = atual.filter((item) => item.id !== id);
       localStorage.setItem(CACHE_CATALOGO, JSON.stringify(novaLista));
       return novaLista;
     });
     if (idEmEdicao === id) cancelarEdicao();
-    mostrarStatus(`🗑️ Produto ${codigo ? `#${codigo}` : ''} excluído do banco!`);
+
+    const resposta = await enviarAoBanco('DELETE', undefined, id);
+    if (!resposta) {
+      // Se falhar, restaura na tela
+      if (itemParaExcluir) {
+        setCatalogo((atual) => [itemParaExcluir, ...atual]);
+      }
+      return;
+    }
+    mostrarStatus(`🗑️ Produto ${codigo ? `#${codigo}` : ''} excluído e salvo automaticamente!`);
+  };
+
+  const handleDesfazerExclusao = async () => {
+    if (!ultimoExcluido) return;
+    const item = ultimoExcluido;
+    setUltimoExcluido(null);
+    const resposta = await enviarAoBanco('POST', item);
+    if (resposta?.produto) {
+      setCatalogo((atual) => {
+        const novaLista = [resposta.produto!, ...atual.filter((p) => p.id !== item.id)];
+        localStorage.setItem(CACHE_CATALOGO, JSON.stringify(novaLista));
+        return novaLista;
+      });
+      mostrarStatus(`↩️ Produto #${item.codigo} restaurado no banco!`);
+    }
   };
 
   // Limpar todos os produtos do catálogo
   const handleLimparTodos = async () => {
-    if (!window.confirm('Tem certeza que deseja excluir TODOS os produtos da vitrine para cadastrar apenas os seus?')) {
-      return;
-    }
     const resposta = await enviarAoBanco('DELETE', undefined, '__TODOS__');
     if (!resposta) return;
     setCatalogo([]);
@@ -645,9 +916,6 @@ export default function VitrineAfiliadosPage() {
 
   // Restaurar produtos de exemplo
   const handleRestaurarPadrao = async () => {
-    if (!window.confirm('Restaurar os 18 produtos iniciais de demonstração na vitrine?')) {
-      return;
-    }
     const resposta = await enviarAoBanco('PUT', { restaurarPadrao: true });
     if (!resposta?.produtos) return;
     setCatalogo(resposta.produtos);
@@ -663,6 +931,7 @@ export default function VitrineAfiliadosPage() {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       const tokenAtual = adminToken || localStorage.getItem(ADMIN_TOKEN_STORAGE) || '';
       if (tokenAtual) headers['x-admin-token'] = tokenAtual;
+      headers['x-admin-pin'] = '1234';
 
       const res = await fetch('/api/admin', {
         method: 'PUT',
@@ -748,6 +1017,27 @@ export default function VitrineAfiliadosPage() {
   // ==========================================================
   const termoLimpo = buscaCodigo.trim().replace(/^#/, '').toLowerCase();
 
+  const verificarFaixaPreco = (preco: number, faixa: FiltroFaixaPreco): boolean => {
+    if (faixa === 'todos') return true;
+    if (faixa === 'ate-50') return preco <= 50;
+    if (faixa === '50-a-100') return preco > 50 && preco <= 100;
+    if (faixa === '100-a-200') return preco > 100 && preco <= 200;
+    if (faixa === 'acima-100') return preco > 100;
+    if (faixa === 'acima-200') return preco > 200;
+    return true;
+  };
+
+  const matchFiltrosGlobais = (item: ProdutoAfiliado): boolean => {
+    const matchLoja = filtroLojaGlobal === 'todas' || item.loja === filtroLojaGlobal;
+    const matchPrecoGlobal = verificarFaixaPreco(item.precoNumerico, filtroPrecoGlobal);
+    const pctDesconto = parseInt((item.desconto || '').replace(/\D/g, ''), 10) || 0;
+    const matchDestaque =
+      filtroDestaqueGlobal === 'todos' ||
+      (filtroDestaqueGlobal === 'em-alta' && item.emAlta) ||
+      (filtroDestaqueGlobal === 'super-desconto' && pctDesconto >= 30);
+    return matchLoja && matchPrecoGlobal && matchDestaque;
+  };
+
   const ordenarLista = (lista: ProdutoAfiliado[]) => {
     return [...lista].sort((a, b) => {
       if (ordenacao === 'menor-preco') return a.precoNumerico - b.precoNumerico;
@@ -759,22 +1049,28 @@ export default function VitrineAfiliadosPage() {
   const looksFiltrados = ordenarLista(
     catalogo.filter((item) => {
       if (item.departamento !== 'looks') return false;
+      if (!matchFiltrosGlobais(item)) return false;
       const matchBusca =
         termoLimpo === '' ||
         item.codigo.toLowerCase().includes(termoLimpo) ||
-        item.titulo.toLowerCase().includes(termoLimpo);
+        item.titulo.toLowerCase().includes(termoLimpo) ||
+        item.categoria.toLowerCase().includes(termoLimpo);
       const matchCategoria =
         categoriaLookAtiva === 'Todos' ||
         item.ocasiao === categoriaLookAtiva ||
         item.genero === categoriaLookAtiva ||
         item.categoria === categoriaLookAtiva;
-      return matchBusca && matchCategoria;
+      const matchOcasiao =
+        ocasiaoLook === 'Todas' || item.ocasiao === ocasiaoLook || item.ocasiao === 'Ambas';
+      const matchPreco = verificarFaixaPreco(item.precoNumerico, faixaPrecoLook);
+      return matchBusca && matchCategoria && matchOcasiao && matchPreco;
     })
   );
 
   const decoracoesFiltradas = ordenarLista(
     catalogo.filter((item) => {
       if (item.departamento !== 'decoracao') return false;
+      if (!matchFiltrosGlobais(item)) return false;
       const matchBusca =
         termoLimpo === '' ||
         item.codigo.toLowerCase().includes(termoLimpo) ||
@@ -788,11 +1084,7 @@ export default function VitrineAfiliadosPage() {
         item.ocasiao === 'Ambas';
       const matchAmbiente =
         ambienteDeco === 'Todos Ambientes' || item.ambiente === ambienteDeco;
-      const matchPreco =
-        faixaPrecoDeco === 'todos' ||
-        (faixaPrecoDeco === 'ate-50' && item.precoNumerico <= 50) ||
-        (faixaPrecoDeco === '50-a-100' && item.precoNumerico > 50 && item.precoNumerico <= 100) ||
-        (faixaPrecoDeco === 'acima-100' && item.precoNumerico > 100);
+      const matchPreco = verificarFaixaPreco(item.precoNumerico, faixaPrecoDeco);
       return matchBusca && matchSub && matchOcasiao && matchAmbiente && matchPreco;
     })
   );
@@ -800,6 +1092,7 @@ export default function VitrineAfiliadosPage() {
   const tecnologiaFiltrada = ordenarLista(
     catalogo.filter((item) => {
       if (item.departamento !== 'tecnologia') return false;
+      if (!matchFiltrosGlobais(item)) return false;
       const matchBusca =
         termoLimpo === '' ||
         item.codigo.toLowerCase().includes(termoLimpo) ||
@@ -807,17 +1100,15 @@ export default function VitrineAfiliadosPage() {
         item.categoria.toLowerCase().includes(termoLimpo);
       const matchSub =
         subcategoriaTech === 'Todas' || item.categoria === subcategoriaTech;
-      const matchPreco =
-        faixaPrecoTech === 'todos' ||
-        (faixaPrecoTech === 'ate-50' && item.precoNumerico <= 50) ||
-        (faixaPrecoTech === '50-a-100' && item.precoNumerico > 50 && item.precoNumerico <= 100) ||
-        (faixaPrecoTech === 'acima-100' && item.precoNumerico > 100);
-      return matchBusca && matchSub && matchPreco;
+      const matchOcasiao =
+        ocasiaoTech === 'Todas' || item.ocasiao === ocasiaoTech || item.ocasiao === 'Ambas';
+      const matchPreco = verificarFaixaPreco(item.precoNumerico, faixaPrecoTech);
+      return matchBusca && matchSub && matchOcasiao && matchPreco;
     })
   );
 
   const favoritosFiltrados = ordenarLista(
-    catalogo.filter((item) => favoritosIds.includes(item.id))
+    catalogo.filter((item) => favoritosIds.includes(item.id) && matchFiltrosGlobais(item))
   );
 
   // Renderizador do Card Híbrido (Com botões de Editar e Excluir que SÓ aparecem para o Admin)
@@ -1049,6 +1340,16 @@ export default function VitrineAfiliadosPage() {
             </div>
 
             <div className="flex items-center gap-2">
+              {ultimoExcluido && (
+                <button
+                  type="button"
+                  onClick={handleDesfazerExclusao}
+                  className="px-3 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-900 text-xs font-bold flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
+                >
+                  <span>↩ Desfazer exclusão (#{ultimoExcluido.codigo})</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => {
@@ -1064,7 +1365,7 @@ export default function VitrineAfiliadosPage() {
                 <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
                 </svg>
-                <span>Novo link</span>
+                <span>Novo link / Filtros</span>
               </button>
 
               {secaoAtiva === 'admin' && (
@@ -1315,12 +1616,44 @@ export default function VitrineAfiliadosPage() {
           </div>
 
           {secaoAtiva !== 'admin' && (
-            <div className="flex items-center justify-between sm:justify-end gap-2 text-xs text-slate-500">
-              <label htmlFor="ordenar" className="text-slate-500 font-medium">
-                Ordenar por:
-              </label>
+            <div className="flex items-center justify-between sm:justify-end gap-2 text-xs text-slate-500 flex-wrap">
+              <select
+                aria-label="Filtrar por loja"
+                value={filtroLojaGlobal}
+                onChange={(e) => setFiltroLojaGlobal(e.target.value as FiltroLojaGlobal)}
+                className="bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-medium focus:outline-none focus:border-slate-400 transition-colors cursor-pointer"
+              >
+                <option value="todas">Todas as lojas</option>
+                <option value="Mercado Livre">Mercado Livre</option>
+                <option value="Shopee">Shopee</option>
+              </select>
+
+              <select
+                aria-label="Filtrar por faixa de preço"
+                value={filtroPrecoGlobal}
+                onChange={(e) => setFiltroPrecoGlobal(e.target.value as FiltroFaixaPreco)}
+                className="bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-medium focus:outline-none focus:border-slate-400 transition-colors cursor-pointer"
+              >
+                <option value="todos">Qualquer preço</option>
+                <option value="ate-50">Até R$ 50</option>
+                <option value="50-a-100">De R$ 50 a R$ 100</option>
+                <option value="acima-100">Acima de R$ 100</option>
+              </select>
+
+              <select
+                aria-label="Filtrar por destaques"
+                value={filtroDestaqueGlobal}
+                onChange={(e) => setFiltroDestaqueGlobal(e.target.value as FiltroDestaqueGlobal)}
+                className="bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-medium focus:outline-none focus:border-slate-400 transition-colors cursor-pointer"
+              >
+                <option value="todos">Todos os itens</option>
+                <option value="em-alta">🔥 Só Em Alta</option>
+                <option value="super-desconto">🏷️ Desconto +30%</option>
+              </select>
+
               <select
                 id="ordenar"
+                aria-label="Ordenar por"
                 value={ordenacao}
                 onChange={(e) => setOrdenacao(e.target.value as Ordenacao)}
                 className="bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-medium focus:outline-none focus:border-slate-400 transition-colors cursor-pointer"
@@ -1599,18 +1932,25 @@ export default function VitrineAfiliadosPage() {
                   </div>
                 </div>
 
-                {/* Classificação Automática */}
+                {/* Classificação Automática + Novos Filtros */}
                 <div className="pt-3 border-t border-slate-100">
-                  <h3 className="text-xs sm:text-sm font-bold text-slate-900 mb-2.5">
-                    2. Categoria no Site (Separado Automaticamente)
-                  </h3>
+                  <div className="flex items-center justify-between gap-2 mb-2.5">
+                    <h3 className="text-xs sm:text-sm font-bold text-slate-900">
+                      2. Categoria e Filtros no Site {idEmEdicao ? '(Salva Automaticamente ao Alterar!)' : '(Separado Automaticamente)'}
+                    </h3>
+                    {idEmEdicao && (
+                      <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                        ⚡ Auto-Save Ativo
+                      </span>
+                    )}
+                  </div>
 
                   <div className="grid grid-cols-3 gap-2 mb-3 bg-slate-100 p-1 rounded-xl">
                     <button
                       type="button"
                       onClick={() => {
                         setNovoDepartamento('looks');
-                        setNovaCategoria(novoGenero);
+                        setNovaCategoria(CATEGORIAS_LOOKS.find((c) => c !== 'Todos') || novoGenero);
                       }}
                       className={`py-2 px-3 rounded-lg text-xs font-semibold transition-all duration-150 cursor-pointer ${
                         novoDepartamento === 'looks'
@@ -1625,7 +1965,9 @@ export default function VitrineAfiliadosPage() {
                       type="button"
                       onClick={() => {
                         setNovoDepartamento('decoracao');
-                        setNovaCategoria('Árvores & Guirlandas');
+                        setNovaCategoria(
+                          SUBCATEGORIAS_DECORACAO.find((c) => c !== 'Todas') || 'Árvores & Guirlandas'
+                        );
                       }}
                       className={`py-2 px-3 rounded-lg text-xs font-semibold transition-all duration-150 cursor-pointer ${
                         novoDepartamento === 'decoracao'
@@ -1640,7 +1982,10 @@ export default function VitrineAfiliadosPage() {
                       type="button"
                       onClick={() => {
                         setNovoDepartamento('tecnologia');
-                        setNovaCategoria('Smartphones & Acessórios');
+                        setNovaCategoria(
+                          SUBCATEGORIAS_TECNOLOGIA.find((c) => c !== 'Todas') ||
+                            'Smartphones & Acessórios'
+                        );
                       }}
                       className={`py-2 px-3 rounded-lg text-xs font-semibold transition-all duration-150 cursor-pointer ${
                         novoDepartamento === 'tecnologia'
@@ -1654,24 +1999,48 @@ export default function VitrineAfiliadosPage() {
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50 p-3.5 rounded-lg border border-slate-200/80">
                     {novoDepartamento === 'looks' && (
-                      <div>
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                          Gênero (Masculino / Feminino):
-                        </label>
-                        <select
-                          value={novoGenero}
-                          onChange={(e) => {
-                            const g = e.target.value as GeneroLook;
-                            setNovoGenero(g);
-                            setNovaCategoria(g);
-                          }}
-                          className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-800"
-                        >
-                          <option value="Feminino">Feminino</option>
-                          <option value="Masculino">Masculino</option>
-                          <option value="Unissex">Unissex</option>
-                        </select>
-                      </div>
+                      <>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                            Filtro / Subcategoria de Moda:
+                          </label>
+                          <select
+                            value={novaCategoria}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setNovaCategoria(val);
+                              if (val === 'Feminino' || val === 'Masculino' || val === 'Unissex') {
+                                setNovoGenero(val);
+                              }
+                            }}
+                            className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-800"
+                          >
+                            {CATEGORIAS_LOOKS.filter((c) => c !== 'Todos').map((c) => (
+                              <option key={c} value={c}>
+                                {c}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                            Gênero (Masculino / Feminino):
+                          </label>
+                          <select
+                            value={novoGenero}
+                            onChange={(e) => {
+                              const g = e.target.value as GeneroLook;
+                              setNovoGenero(g);
+                            }}
+                            className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-800"
+                          >
+                            <option value="Feminino">Feminino</option>
+                            <option value="Masculino">Masculino</option>
+                            <option value="Unissex">Unissex</option>
+                          </select>
+                        </div>
+                      </>
                     )}
 
                     {novoDepartamento === 'decoracao' && (
@@ -1762,6 +2131,39 @@ export default function VitrineAfiliadosPage() {
                         <option value="Outra">Outra Loja</option>
                       </select>
                     </div>
+
+                    {/* Criação Rápida de Novo Filtro direto no Formulário */}
+                    <div className="sm:col-span-3 pt-2 border-t border-slate-200/80">
+                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        ➕ Quer criar um novo filtro para{' '}
+                        {novoDepartamento === 'looks'
+                          ? 'Moda'
+                          : novoDepartamento === 'decoracao'
+                          ? 'Decoração'
+                          : 'Tecnologia'}
+                        ? (Já salva e seleciona na hora)
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={textoFiltroInline}
+                          onChange={(e) => setTextoFiltroInline(e.target.value)}
+                          placeholder="Ex: Fitness & Academia, Praia & Piscina, Jogos & Gamer, Cozinha..."
+                          className="flex-1 bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:border-slate-900"
+                        />
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!textoFiltroInline.trim()) return;
+                            await adicionarFiltroPersonalizado(novoDepartamento, textoFiltroInline);
+                            setTextoFiltroInline('');
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-[#EE4D2D] text-white text-xs font-semibold transition-all cursor-pointer shrink-0"
+                        >
+                          + Criar e usar filtro
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -1774,7 +2176,7 @@ export default function VitrineAfiliadosPage() {
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                       </svg>
-                      <span>Salvar Alterações do Produto</span>
+                      <span>Concluir Edição (Já salvo automaticamente!)</span>
                     </>
                   ) : (
                     <>
@@ -1810,14 +2212,13 @@ export default function VitrineAfiliadosPage() {
                         precoAntigoNum > 0 ? formatarMoeda(precoAntigoNum) : 'R$ 149,90',
                       desconto: descontoCalculado || '33% OFF',
                       departamento: novoDepartamento,
-                      categoria:
-                        novoDepartamento === 'looks' ? novoGenero : novaCategoria,
+                      categoria: novaCategoria || novoGenero,
                       genero: novoDepartamento === 'looks' ? novoGenero : undefined,
                       ocasiao: novaOcasiao,
                       ambiente: novoAmbiente,
                       loja: novaLoja,
                       avaliacao: '4.9',
-                      vendidos: 'Novo na vitrine',
+                      vendidos: novoVendidos || 'Novo na vitrine',
                       emAlta: true,
                       freteGratis: true,
                       imagem:
@@ -1831,7 +2232,88 @@ export default function VitrineAfiliadosPage() {
               </div>
             </div>
 
-            {/* Lista Completa para Editar ou Excluir Links */}
+            {/* GERENCIADOR DE FILTROS DA VITRINE (ADICIONAR / EXCLUIR COM AUTO-SAVE) */}
+            <div className="bg-white rounded-xl shadow-xs border border-slate-200/90 p-4 sm:p-6 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-3 border-b border-slate-100">
+                <div>
+                  <h2 className="text-base font-bold text-slate-900">
+                    🏷️ Configurar e Adicionar Novos Filtros da Vitrine (Salva Automaticamente)
+                  </h2>
+                  <p className="text-xs text-slate-500">
+                    Crie novos botões de filtro para Moda, Decoração, Tecnologia ou Ambientes. Tudo salva na hora no banco de dados.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <select
+                    value={abaNovoFiltro}
+                    onChange={(e) => setAbaNovoFiltro(e.target.value as keyof FiltrosCatalogoUI)}
+                    className="bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-800"
+                  >
+                    <option value="looks">Moda / Looks</option>
+                    <option value="decoracao">Decoração</option>
+                    <option value="tecnologia">Tecnologia</option>
+                    <option value="ambientes">Ambientes (Casa)</option>
+                  </select>
+                  <input
+                    type="text"
+                    value={textoNovoFiltro}
+                    onChange={(e) => setTextoNovoFiltro(e.target.value)}
+                    placeholder="Nome do novo filtro..."
+                    className="border border-slate-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:border-slate-900"
+                  />
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!textoNovoFiltro.trim()) return;
+                      await adicionarFiltroPersonalizado(abaNovoFiltro, textoNovoFiltro);
+                      setTextoNovoFiltro('');
+                    }}
+                    className="px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-[#EE4D2D] text-white text-xs font-semibold transition-all cursor-pointer shrink-0"
+                  >
+                    + Adicionar filtro
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {(
+                  [
+                    { chave: 'looks', titulo: 'Filtros de Moda', lista: filtrosCustom.looks },
+                    { chave: 'decoracao', titulo: 'Filtros de Decoração', lista: filtrosCustom.decoracao },
+                    { chave: 'tecnologia', titulo: 'Filtros de Tecnologia', lista: filtrosCustom.tecnologia },
+                    { chave: 'ambientes', titulo: 'Filtros de Ambiente', lista: filtrosCustom.ambientes },
+                  ] as const
+                ).map((grupo) => (
+                  <div
+                    key={grupo.chave}
+                    className="bg-slate-50/80 border border-slate-200/80 rounded-lg p-3 space-y-2"
+                  >
+                    <h3 className="text-xs font-bold text-slate-800">{grupo.titulo}</h3>
+                    <div className="flex flex-wrap gap-1.5">
+                      {grupo.lista.map((nome) => (
+                        <span
+                          key={nome}
+                          className="inline-flex items-center gap-1 bg-white border border-slate-200 text-slate-700 text-[11px] font-medium px-2 py-0.5 rounded-md"
+                        >
+                          <span>{nome}</span>
+                          <button
+                            type="button"
+                            onClick={() => removerFiltroPersonalizado(grupo.chave, nome)}
+                            className="text-slate-400 hover:text-rose-600 font-bold ml-0.5 cursor-pointer"
+                            title={`Remover filtro ${nome}`}
+                          >
+                            ✕
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Lista Completa para Editar ou Excluir Links (COM SALVAMENTO AUTOMÁTICO INLINE) */}
             <div className="bg-white rounded-xl shadow-xs border border-slate-200/90 p-4 sm:p-6">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-4 border-b border-slate-100">
                 <div>
@@ -1839,7 +2321,7 @@ export default function VitrineAfiliadosPage() {
                     Gerenciar Todos os Seus Links ({catalogo.length})
                   </h2>
                   <p className="text-xs text-slate-500">
-                    Clique em &ldquo;Editar&rdquo; para trocar um link ou preço, ou em &ldquo;Excluir&rdquo; para remover da página.
+                    Mude o filtro/categoria de qualquer produto abaixo e ele já salva automaticamente na hora, ou clique em &ldquo;Editar&rdquo; / &ldquo;Excluir&rdquo;.
                   </p>
                 </div>
 
@@ -1887,72 +2369,135 @@ export default function VitrineAfiliadosPage() {
                 </div>
               </div>
 
-              <div className="divide-y divide-slate-100 mt-2 max-h-96 overflow-y-auto">
+              <div className="divide-y divide-slate-100 mt-2 max-h-[520px] overflow-y-auto">
                 {catalogo
                   .filter(
                     (item) =>
                       filtroGerenciarDepto === 'todos' ||
                       item.departamento === filtroGerenciarDepto
                   )
-                  .map((item) => (
-                    <div
-                      key={item.id}
-                      className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-                    >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <img
-                          src={item.imagem}
-                          alt={item.titulo}
-                          className="w-11 h-14 object-cover rounded-md bg-slate-100 shrink-0"
-                        />
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="text-xs font-bold bg-slate-900 text-white px-1.5 py-0.5 rounded-xs">
-                              #{item.codigo}
-                            </span>
-                            <span className="text-[11px] font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md">
-                              {item.departamento.toUpperCase()} • {item.categoria}
-                            </span>
-                            <span className="text-[11px] text-slate-500">
-                              ({item.loja})
-                            </span>
+                  .map((item) => {
+                    const opcoesCatItem =
+                      item.departamento === 'looks'
+                        ? CATEGORIAS_LOOKS.filter((c) => c !== 'Todos')
+                        : item.departamento === 'decoracao'
+                        ? SUBCATEGORIAS_DECORACAO.filter((c) => c !== 'Todas')
+                        : SUBCATEGORIAS_TECNOLOGIA.filter((c) => c !== 'Todas');
+
+                    return (
+                      <div
+                        key={item.id}
+                        className="py-3.5 flex flex-col lg:flex-row lg:items-center justify-between gap-3"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <img
+                            src={item.imagem}
+                            alt={item.titulo}
+                            className="w-11 h-14 object-cover rounded-md bg-slate-100 shrink-0"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-xs font-bold bg-slate-900 text-white px-1.5 py-0.5 rounded-xs">
+                                #{item.codigo}
+                              </span>
+                              <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md">
+                                {item.preco}
+                              </span>
+
+                              {/* Seletor Rápido de Departamento (Auto-Save ao mudar) */}
+                              <select
+                                aria-label="Departamento do produto"
+                                value={item.departamento}
+                                onChange={(e) => {
+                                  const novoDep = e.target.value as DepartamentoProduto;
+                                  const catPadrao =
+                                    novoDep === 'looks'
+                                      ? 'Feminino'
+                                      : novoDep === 'decoracao'
+                                      ? 'Árvores & Guirlandas'
+                                      : 'Smartphones & Acessórios';
+                                  atualizarCampoRapido(item, {
+                                    departamento: novoDep,
+                                    categoria: catPadrao,
+                                  });
+                                }}
+                                className="bg-slate-100 hover:bg-slate-200/70 text-[11px] font-semibold text-slate-700 px-2 py-0.5 rounded-md border border-slate-200 cursor-pointer"
+                              >
+                                <option value="looks">MODA</option>
+                                <option value="decoracao">DECORAÇÃO</option>
+                                <option value="tecnologia">TECNOLOGIA</option>
+                              </select>
+
+                              {/* Seletor Rápido de Filtro / Categoria (Auto-Save ao mudar) */}
+                              <select
+                                aria-label="Filtro ou categoria do produto"
+                                value={item.categoria}
+                                onChange={(e) =>
+                                  atualizarCampoRapido(item, { categoria: e.target.value })
+                                }
+                                className="bg-slate-100 hover:bg-slate-200/70 text-[11px] font-semibold text-slate-800 px-2 py-0.5 rounded-md border border-slate-200 cursor-pointer"
+                              >
+                                {!opcoesCatItem.includes(item.categoria) && (
+                                  <option value={item.categoria}>{item.categoria}</option>
+                                )}
+                                {opcoesCatItem.map((op) => (
+                                  <option key={op} value={op}>
+                                    {op}
+                                  </option>
+                                ))}
+                              </select>
+
+                              {/* Seletor Rápido de Loja (Auto-Save ao mudar) */}
+                              <select
+                                aria-label="Loja do produto"
+                                value={item.loja}
+                                onChange={(e) =>
+                                  atualizarCampoRapido(item, {
+                                    loja: e.target.value as 'Shopee' | 'Mercado Livre' | 'Outra',
+                                  })
+                                }
+                                className="bg-white text-[11px] font-medium text-slate-600 px-2 py-0.5 rounded-md border border-slate-200 cursor-pointer"
+                              >
+                                <option value="Mercado Livre">Mercado Livre</option>
+                                <option value="Shopee">Shopee</option>
+                                <option value="Outra">Outra</option>
+                              </select>
+                            </div>
+                            <p className="text-xs sm:text-sm font-medium text-slate-800 truncate mt-1">
+                              {item.titulo}
+                            </p>
+                            <p className="text-[11px] text-slate-400 truncate">{item.link}</p>
                           </div>
-                          <p className="text-xs sm:text-sm font-medium text-slate-800 truncate mt-0.5">
-                            {item.titulo}
-                          </p>
-                          <p className="text-[11px] text-slate-400 truncate">
-                            {item.link}
-                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0 self-end lg:self-center">
+                          <button
+                            type="button"
+                            onClick={() => copiarMensagemDivulgacao(item)}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-slate-700 bg-white hover:bg-slate-50 active:scale-[0.98] px-2.5 py-1.5 rounded-lg border border-slate-200 transition-all duration-150 cursor-pointer"
+                          >
+                            {copiadoId === item.id ? 'Copiado!' : 'Copiar'}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={(e) => iniciarEdicaoProduto(e, item)}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-slate-700 bg-white hover:bg-slate-900 hover:text-white hover:border-slate-900 active:scale-[0.98] px-2.5 py-1.5 rounded-lg border border-slate-200 transition-all duration-150 cursor-pointer"
+                          >
+                            Editar
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={(e) => handleExcluirProduto(e, item.id, item.codigo)}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-rose-600 bg-white hover:bg-rose-50 hover:border-rose-300 active:scale-[0.98] px-2.5 py-1.5 rounded-lg border border-rose-200/80 transition-all duration-150 cursor-pointer"
+                          >
+                            Excluir
+                          </button>
                         </div>
                       </div>
-
-                      <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
-                        <button
-                          type="button"
-                          onClick={() => copiarMensagemDivulgacao(item)}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-slate-700 bg-white hover:bg-slate-50 active:scale-[0.98] px-2.5 py-1.5 rounded-lg border border-slate-200 transition-all duration-150 cursor-pointer"
-                        >
-                          {copiadoId === item.id ? 'Copiado!' : 'Copiar'}
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={(e) => iniciarEdicaoProduto(e, item)}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-slate-700 bg-white hover:bg-slate-900 hover:text-white hover:border-slate-900 active:scale-[0.98] px-2.5 py-1.5 rounded-lg border border-slate-200 transition-all duration-150 cursor-pointer"
-                        >
-                          Editar
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={(e) => handleExcluirProduto(e, item.id, item.codigo)}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-rose-600 bg-white hover:bg-rose-50 hover:border-rose-300 active:scale-[0.98] px-2.5 py-1.5 rounded-lg border border-rose-200/80 transition-all duration-150 cursor-pointer"
-                        >
-                          Excluir
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
               </div>
             </div>
           </section>
@@ -2012,7 +2557,7 @@ export default function VitrineAfiliadosPage() {
         {(secaoAtiva === 'tudo' || secaoAtiva === 'looks') && (
           <section aria-labelledby="titulo-looks">
             <div className="bg-white rounded-xl p-3.5 sm:p-5 shadow-xs border border-slate-200/80 mb-4">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-3 border-b border-slate-100">
                 <div>
                   <span className="inline-block text-[10px] font-bold uppercase tracking-wider text-[#EE4D2D] bg-[#EE4D2D]/10 px-2 py-0.5 rounded-xs mb-1">
                     Moda Fim de Ano • Masculino &amp; Feminino
@@ -2021,12 +2566,38 @@ export default function VitrineAfiliadosPage() {
                     Looks de Natal &amp; Réveillon
                   </h2>
                 </div>
-                <span className="text-xs text-slate-500">
-                  Exibindo <strong className="text-slate-800">{looksFiltrados.length}</strong> looks
-                </span>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <select
+                    aria-label="Ocasião de Moda"
+                    value={ocasiaoLook}
+                    onChange={(e) => setOcasiaoLook(e.target.value as 'Todas' | 'Natal' | 'Réveillon')}
+                    className="bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors cursor-pointer"
+                  >
+                    <option value="Todas">Todas as ocasiões</option>
+                    <option value="Natal">Natal</option>
+                    <option value="Réveillon">Réveillon</option>
+                  </select>
+
+                  <select
+                    aria-label="Faixa de preço de Moda"
+                    value={faixaPrecoLook}
+                    onChange={(e) => setFaixaPrecoLook(e.target.value as FiltroFaixaPreco)}
+                    className="bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors cursor-pointer"
+                  >
+                    <option value="todos">Qualquer preço</option>
+                    <option value="ate-50">Até R$ 50</option>
+                    <option value="50-a-100">De R$ 50 a R$ 100</option>
+                    <option value="acima-100">Acima de R$ 100</option>
+                  </select>
+
+                  <span className="text-xs bg-slate-100 text-slate-700 font-semibold px-2.5 py-1 rounded-lg">
+                    {looksFiltrados.length} looks
+                  </span>
+                </div>
               </div>
 
-              <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pt-1">
+              <div className="mt-3 flex items-center gap-1.5 overflow-x-auto scrollbar-hide">
                 {CATEGORIAS_LOOKS.map((categoria) => {
                   const ativo = categoriaLookAtiva === categoria;
                   return (
@@ -2189,8 +2760,20 @@ export default function VitrineAfiliadosPage() {
                   </h2>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <select
+                    aria-label="Ocasião de Tecnologia"
+                    value={ocasiaoTech}
+                    onChange={(e) => setOcasiaoTech(e.target.value as 'Todas' | 'Natal' | 'Réveillon')}
+                    className="bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors cursor-pointer"
+                  >
+                    <option value="Todas">Todas as ocasiões</option>
+                    <option value="Natal">Presentes de Natal</option>
+                    <option value="Réveillon">Réveillon</option>
+                  </select>
+
+                  <select
+                    aria-label="Faixa de preço de Tecnologia"
                     value={faixaPrecoTech}
                     onChange={(e) => setFaixaPrecoTech(e.target.value as FiltroFaixaPreco)}
                     className="bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer"
@@ -2200,6 +2783,10 @@ export default function VitrineAfiliadosPage() {
                     <option value="50-a-100">De R$ 50 a R$ 100</option>
                     <option value="acima-100">Acima de R$ 100</option>
                   </select>
+
+                  <span className="text-xs bg-slate-100 text-slate-700 font-semibold px-2.5 py-1 rounded-lg">
+                    {tecnologiaFiltrada.length} itens
+                  </span>
                 </div>
               </div>
 

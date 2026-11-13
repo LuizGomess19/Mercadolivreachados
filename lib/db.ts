@@ -167,7 +167,6 @@ async function salvarFirestore(lista: ProdutoAfiliado[]): Promise<boolean> {
       body: JSON.stringify({
         fields: {
           payload: { stringValue: JSON.stringify(lista) },
-          initialized: { booleanValue: true },
           updatedAt: { stringValue: new Date().toISOString() },
         },
       }),
@@ -176,6 +175,141 @@ async function salvarFirestore(lista: ProdutoAfiliado[]): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// 1b. Filtros Dinâmicos e Personalizáveis (Salvos na Nuvem + Local)
+// ---------------------------------------------------------------------------
+const FILTROS_DOC_ID = 'mercadolivreachados_filtros_v1';
+const FILTROS_PATH = path.join(process.cwd(), 'data', 'filtros.json');
+
+export interface FiltrosCatalogo {
+  looks: string[];
+  decoracao: string[];
+  tecnologia: string[];
+  ambientes: string[];
+}
+
+export const FILTROS_PADRAO: FiltrosCatalogo = {
+  looks: [
+    'Todos',
+    'Feminino',
+    'Masculino',
+    'Unissex',
+    'Natal',
+    'Réveillon',
+    'Vestidos & Macacões',
+    'Camisas & Conjuntos',
+    'Calçados & Acessórios',
+    'Infantil',
+  ],
+  decoracao: [
+    'Todas',
+    'Árvores & Guirlandas',
+    'Iluminação LED',
+    'Mesa Posta & Ceia',
+    'Balões & Réveillon',
+    'Enfeites & Casa',
+    'Cozinha & Utilidades',
+    'Quarto & Sala',
+  ],
+  tecnologia: [
+    'Todas',
+    'Áudio & Caixas de Som',
+    'Smartphones & Acessórios',
+    'Smartwatches & Presentes',
+    'Casa Inteligente & LED',
+    'Games & Informática',
+    'Beleza & Cuidados',
+    'Eletroportáteis',
+  ],
+  ambientes: [
+    'Todos Ambientes',
+    'Sala',
+    'Mesa de Ceia',
+    'Varanda & Área Externa',
+    'Festa',
+    'Quarto',
+    'Cozinha',
+  ],
+};
+
+function normalizarFiltros(input: unknown): FiltrosCatalogo {
+  const obj = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  const limparLista = (arr: unknown, padrao: string[], primeiroFixo: string): string[] => {
+    const base = Array.isArray(arr)
+      ? arr.map((x) => (typeof x === 'string' ? x.trim() : '')).filter(Boolean)
+      : padrao;
+    const unicos = Array.from(new Set([primeiroFixo, ...base]));
+    return unicos.length > 1 ? unicos : padrao;
+  };
+  return {
+    looks: limparLista(obj.looks, FILTROS_PADRAO.looks, 'Todos'),
+    decoracao: limparLista(obj.decoracao, FILTROS_PADRAO.decoracao, 'Todas'),
+    tecnologia: limparLista(obj.tecnologia, FILTROS_PADRAO.tecnologia, 'Todas'),
+    ambientes: limparLista(obj.ambientes, FILTROS_PADRAO.ambientes, 'Todos Ambientes'),
+  };
+}
+
+export async function listarFiltros(): Promise<FiltrosCatalogo> {
+  try {
+    const res = await fetch(getFirestoreUrl(FILTROS_DOC_ID), {
+      method: 'GET',
+      cache: 'no-store',
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const rawJson = data?.fields?.payload?.stringValue;
+      if (typeof rawJson === 'string') {
+        const parsed = normalizarFiltros(JSON.parse(rawJson));
+        globalThis.__filtrosCache = parsed;
+        return parsed;
+      }
+    }
+  } catch {
+    // fallback local
+  }
+
+  if (globalThis.__filtrosCache) return globalThis.__filtrosCache;
+
+  try {
+    const raw = await fs.readFile(FILTROS_PATH, 'utf-8');
+    const parsed = normalizarFiltros(JSON.parse(raw));
+    globalThis.__filtrosCache = parsed;
+    return parsed;
+  } catch {
+    return FILTROS_PADRAO;
+  }
+}
+
+export async function salvarFiltros(novosFiltros: unknown): Promise<FiltrosCatalogo> {
+  const normalizados = normalizarFiltros(novosFiltros);
+  globalThis.__filtrosCache = normalizados;
+
+  try {
+    await fs.mkdir(path.dirname(FILTROS_PATH), { recursive: true });
+    await fs.writeFile(FILTROS_PATH, JSON.stringify(normalizados, null, 2), 'utf-8');
+  } catch {
+    // ambiente serverless
+  }
+
+  try {
+    await fetch(getFirestoreUrl(FILTROS_DOC_ID), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+      body: JSON.stringify({
+        fields: {
+          payload: { stringValue: JSON.stringify(normalizados) },
+          updatedAt: { stringValue: new Date().toISOString() },
+        },
+      }),
+    });
+  } catch {
+    // mantém em memória
+  }
+
+  return normalizados;
 }
 
 // ---------------------------------------------------------------------------
@@ -193,6 +327,8 @@ declare global {
   var __catalogoLocal: ProdutoAfiliado[] | undefined;
   // eslint-disable-next-line no-var
   var __configSupabaseCache: ConfigSupabase | null | undefined;
+  // eslint-disable-next-line no-var
+  var __filtrosCache: FiltrosCatalogo | undefined;
 }
 
 function lerSupabaseEnv(): ConfigSupabase | null {

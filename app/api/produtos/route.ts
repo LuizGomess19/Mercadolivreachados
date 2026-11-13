@@ -5,7 +5,9 @@ import {
   atualizarProduto,
   criarProduto,
   excluirProduto,
+  listarFiltros,
   listarProdutos,
+  salvarFiltros,
   statusBanco,
   substituirCatalogo,
   validarProduto,
@@ -33,13 +35,18 @@ function erroServidor(error: unknown) {
   return NextResponse.json({ ok: false, erro: mensagem }, { status: 500, headers: NO_CACHE_HEADERS });
 }
 
-// Listar produtos (público — sempre busca a versão mais recente do banco)
+// Listar produtos e filtros (público — sempre busca a versão mais recente do banco)
 export async function GET() {
   try {
-    const [produtos, status] = await Promise.all([listarProdutos(), statusBanco()]);
+    const [produtos, filtros, status] = await Promise.all([
+      listarProdutos(),
+      listarFiltros(),
+      statusBanco(),
+    ]);
     return NextResponse.json(
       {
         produtos,
+        filtros,
         persistente: status.persistente,
         supabaseConectado: status.supabaseConectado,
         atualizadoEm: new Date().toISOString(),
@@ -75,7 +82,13 @@ export async function PUT(request: Request) {
   try {
     const body = await request.json();
 
-    // Caso 1: Restaurar catálogo padrão
+    // Caso 1: Salvar filtros personalizados (auto-save imediato)
+    if (body && typeof body === 'object' && body.filtros && typeof body.filtros === 'object') {
+      const filtros = await salvarFiltros(body.filtros);
+      return NextResponse.json({ ok: true, filtros }, { headers: NO_CACHE_HEADERS });
+    }
+
+    // Caso 2: Restaurar catálogo padrão
     if (body && typeof body === 'object' && body.restaurarPadrao === true) {
       const produtos = await substituirCatalogo(PRODUTOS_INICIAIS);
       return NextResponse.json({ ok: true, produtos }, { headers: NO_CACHE_HEADERS });
